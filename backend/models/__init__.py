@@ -1,0 +1,86 @@
+from backend.models.patch import (
+    PatchAttemptResponse,
+    PatchFileChange,
+    PatchGenerationRequest,
+    PatchGenerationResult,
+    PatchStatus,
+)
+from backend.models.repository_context import (
+    CodeLocation,
+    ContextFile,
+    EnclosingScope,
+    ImportStatement,
+    RelatedTest,
+    RepositoryContext,
+)
+from backend.models.risk_assessment import (
+    AssessmentMethod,
+    AssessRiskRequest,
+    AssessRiskResponse,
+    PriorityLevel,
+    PrioritizedVulnerability,
+    RiskAssessment,
+    RiskContext,
+)
+from backend.models.vulnerability import (
+    Confidence,
+    HealthResponse,
+    ScanRequest,
+    ScanResponse,
+    Severity,
+    VulnerabilityFinding,
+    VulnerabilityStatus,
+    WorkflowResponse,
+    WorkflowStatus,
+)
+
+from backend.models.validation import (
+    SecurityComparisonResult,
+    ValidationResult,
+    ValidationStatus,
+)
+from backend.models.retry import (
+    FailureCategory,
+    RetryAttemptRecord,
+    RetryDecision,
+    RetryLoopResult,
+    RetryStatus,
+)
+
+__all__ = [
+    "Severity",
+    "Confidence",
+    "VulnerabilityStatus",
+    "WorkflowStatus",
+    "VulnerabilityFinding",
+    "ScanRequest",
+    "ScanResponse",
+    "HealthResponse",
+    "WorkflowResponse",
+    "PriorityLevel",
+    "AssessmentMethod",
+    "RiskContext",
+    "RiskAssessment",
+    "PrioritizedVulnerability",
+    "AssessRiskRequest",
+    "AssessRiskResponse",
+    "CodeLocation",
+    "ImportStatement",
+    "EnclosingScope",
+    "ContextFile",
+    "RelatedTest",
+    "RepositoryContext",
+    "PatchStatus",
+    "PatchFileChange",
+    "PatchGenerationRequest",
+    "PatchGenerationResult",
+    "PatchAttemptResponse",
+    "ValidationStatus",
+    "ValidationResult",
+    "SecurityComparisonResult",
+    "RetryStatus",
+    "FailureCategory",
+    "RetryDecision",
+    "RetryAttemptRecord",
+    "RetryLoopResult",
+]
