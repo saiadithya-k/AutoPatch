@@ -50,18 +50,28 @@ class SemgrepRunner:
         if which_semgrep:
             return [which_semgrep]
 
-        # 2. Python environment Scripts directory (common on Windows)
-        scripts_semgrep = os.path.join(os.path.dirname(sys.executable), "Scripts", "semgrep.exe")
+        # 2. Virtualenv or direct python directory (e.g. .venv/Scripts/semgrep.exe)
+        exe_name = "semgrep.exe" if os.name == "nt" else "semgrep"
+        direct_semgrep = os.path.join(os.path.dirname(sys.executable), exe_name)
+        if os.path.exists(direct_semgrep):
+            return [direct_semgrep]
+
+        pysemgrep_name = "pysemgrep.exe" if os.name == "nt" else "pysemgrep"
+        direct_pysemgrep = os.path.join(os.path.dirname(sys.executable), pysemgrep_name)
+        if os.path.exists(direct_pysemgrep):
+            return [direct_pysemgrep]
+
+        # 3. Python environment Scripts directory (common on Windows without venv)
+        scripts_semgrep = os.path.join(os.path.dirname(sys.executable), "Scripts", exe_name)
         if os.path.exists(scripts_semgrep):
             return [scripts_semgrep]
 
-        # 3. pysemgrep.exe in Scripts directory
-        scripts_pysemgrep = os.path.join(os.path.dirname(sys.executable), "Scripts", "pysemgrep.exe")
+        scripts_pysemgrep = os.path.join(os.path.dirname(sys.executable), "Scripts", pysemgrep_name)
         if os.path.exists(scripts_pysemgrep):
             return [scripts_pysemgrep]
 
-        # 4. Fallback directly to 'semgrep'
-        return ["semgrep"]
+        # 4. Fallback to python module execution or direct command
+        return [sys.executable, "-m", "semgrep"]
 
     def run(self, repo_path: str | Path, custom_config: Optional[str] = None) -> SemgrepResult:
         """
@@ -83,7 +93,7 @@ class SemgrepRunner:
         rule_config = custom_config or self.config
 
         # Build safe subprocess argument list (no shell=True)
-        cmd = cmd_base + ["--config", rule_config, "--json", "--quiet", str(target_path)]
+        cmd = cmd_base + ["--config", rule_config, "--no-git-ignore", "--json", "--quiet", str(target_path)]
 
         logger.info("Executing Semgrep: %s", " ".join(cmd))
 

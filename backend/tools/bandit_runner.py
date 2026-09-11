@@ -45,12 +45,18 @@ class BanditRunner:
         if which_bandit:
             return [which_bandit]
 
-        # 2. Python environment Scripts directory (common on Windows)
-        scripts_bandit = os.path.join(os.path.dirname(sys.executable), "Scripts", "bandit.exe")
+        # 2. Virtualenv or direct python directory (e.g. .venv/Scripts/bandit.exe)
+        exe_name = "bandit.exe" if os.name == "nt" else "bandit"
+        direct_bandit = os.path.join(os.path.dirname(sys.executable), exe_name)
+        if os.path.exists(direct_bandit):
+            return [direct_bandit]
+
+        # 3. Python environment Scripts directory (common on Windows without venv)
+        scripts_bandit = os.path.join(os.path.dirname(sys.executable), "Scripts", exe_name)
         if os.path.exists(scripts_bandit):
             return [scripts_bandit]
 
-        # 3. Python module execution fallback
+        # 4. Python module execution fallback
         return [sys.executable, "-m", "bandit"]
 
     def run(self, repo_path: str | Path) -> BanditResult:

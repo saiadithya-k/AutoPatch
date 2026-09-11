@@ -26,21 +26,24 @@ T = TypeVar("T")
 PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "prompts"
 
 
+_UNSET = object()
+
+
 class LLMService:
     """Central manager providing provider-independent LLM capabilities."""
 
     def __init__(
         self,
-        provider: Optional[LLMProvider] = None,
+        provider: Any = _UNSET,
         provider_name: Optional[str] = None,
     ):
         """
         Initialize LLM service with an explicit provider or auto-instantiate from settings.
 
-        :param provider: Direct LLMProvider instance (e.g., MockLLMProvider for testing).
-        :param provider_name: Override provider name ('openai', 'mock').
+        :param provider: Direct LLMProvider instance (or None to force unconfigured).
+        :param provider_name: Override provider name ('openai', 'ollama', 'mock').
         """
-        if provider is not None:
+        if provider is not _UNSET:
             self.provider = provider
         else:
             self.provider = self._instantiate_default_provider(provider_name)
@@ -52,11 +55,21 @@ class LLMService:
 
         if name == "mock":
             return MockLLMProvider(model=settings.LLM_MODEL)
+        elif name == "ollama":
+            base_url = settings.LLM_BASE_URL or "http://localhost:11434/v1"
+            api_key = settings.OPENAI_API_KEY or "ollama"
+            return OpenAIProvider(
+                api_key=api_key,
+                model=settings.LLM_MODEL or "qwen2.5-coder:7b",
+                base_url=base_url,
+            )
         elif name == "openai":
             if settings.OPENAI_API_KEY:
+                base_url = settings.LLM_BASE_URL or "https://api.openai.com/v1"
                 return OpenAIProvider(
                     api_key=settings.OPENAI_API_KEY,
                     model=settings.LLM_MODEL,
+                    base_url=base_url,
                 )
             else:
                 logger.info("OPENAI_API_KEY is not configured; LLM service running in unconfigured state.")

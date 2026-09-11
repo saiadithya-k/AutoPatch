@@ -37,6 +37,7 @@ from backend.database.models import (
     WorkflowModel,
     utc_now,
 )
+from backend.models.audit import AuditEventStatus, AuditEventType
 from backend.models.patch import PatchGenerationResult, PatchStatus
 from backend.models.retry import (
     FailureCategory,
@@ -54,6 +55,7 @@ from backend.models.vulnerability import (
 )
 from backend.agents.patch_generation_agent import PatchGenerationAgent
 from backend.agents.validation_agent import ValidationAgent
+from backend.services.audit import AuditService
 from backend.services.repository_context import RepositoryContextService
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,7 @@ class RetryAgent:
         validation_agent: Optional[ValidationAgent] = None,
         repository_context_service: Optional[RepositoryContextService] = None,
         max_retries: Optional[int] = None,
+        audit_service: Optional[AuditService] = None,
     ):
         """
         Initialize RetryAgent.
@@ -82,6 +85,7 @@ class RetryAgent:
         self.patch_generation_agent = patch_generation_agent or PatchGenerationAgent()
         self.validation_agent = validation_agent or ValidationAgent()
         self.repository_context_service = repository_context_service or RepositoryContextService()
+        self.audit_service = audit_service or AuditService()
 
     def evaluate_retryability(
         self,
@@ -364,6 +368,25 @@ Instruction: Analyze the failure evidence above. Generate an improved patch that
                     with session_scope() as session:
                         _persist_no_prog(session)
 
+                try:
+                    self.audit_service.record_event(
+                        event_type=AuditEventType.NO_PROGRESS,
+                        workflow_id=workflow_id,
+                        vulnerability_id=vulnerability_id,
+                        patch_attempt_id=current_patch_id,
+                        validation_id=last_val_id,
+                        event_status=AuditEventStatus.WARNING,
+                        message=f"Halting retry loop: candidate patch is byte-for-byte identical to predecessor (attempt {current_attempt_num}).",
+                        metadata={
+                            "attempt_number": current_attempt_num,
+                            "parent_patch_id": patch_record.parent_patch_id,
+                            "retries_used": retries_used,
+                        },
+                        session=db_session,
+                    )
+                except Exception as audit_err:
+                    logger.warning("Failed to record NO_PROGRESS audit event: %s", audit_err)
+
                 record = RetryAttemptRecord(
                     attempt_number=current_attempt_num,
                     patch_id=current_patch_id,
@@ -480,6 +503,27 @@ Instruction: Analyze the failure evidence above. Generate an improved patch that
                 with session_scope() as session:
                     _persist_failure(session)
 
+            try:
+                self.audit_service.record_event(
+                    event_type=AuditEventType.RETRY_DECISION,
+                    workflow_id=workflow_id,
+                    vulnerability_id=vulnerability_id,
+                    patch_attempt_id=current_patch_id,
+                    validation_id=val_result.id,
+                    event_status=AuditEventStatus.INFO if decision.should_retry else AuditEventStatus.WARNING,
+                    message=f"Retry decision evaluated: should_retry={decision.should_retry} ({decision.reason})",
+                    metadata={
+                        "should_retry": decision.should_retry,
+                        "failure_category": decision.failure_category.value,
+                        "retry_number": retries_used + 1 if decision.should_retry else retries_used,
+                        "can_retry_further": decision.can_retry_further,
+                        "reason": decision.reason,
+                    },
+                    session=db_session,
+                )
+            except Exception as audit_err:
+                logger.warning("Failed to record RETRY_DECISION audit event: %s", audit_err)
+
             record = RetryAttemptRecord(
                 attempt_number=current_attempt_num,
                 patch_id=current_patch_id,
@@ -499,6 +543,27 @@ Instruction: Analyze the failure evidence above. Generate an improved patch that
                     if not decision.can_retry_further
                     else RetryStatus.FAILED.value
                 )
+                if terminal_status == RetryStatus.RETRY_EXHAUSTED.value:
+                    try:
+                        self.audit_service.record_event(
+                            event_type=AuditEventType.RETRY_EXHAUSTED,
+                            workflow_id=workflow_id,
+                            vulnerability_id=vulnerability_id,
+                            patch_attempt_id=current_patch_id,
+                            validation_id=last_val_id,
+                            event_status=AuditEventStatus.WARNING,
+                            message=f"Retry limit exhausted ({retries_used}/{allowed_retries} retries used).",
+                            metadata={
+                                "retries_used": retries_used,
+                                "max_retries": allowed_retries,
+                                "terminal_status": terminal_status,
+                                "final_failure_reason": final_failure_reason,
+                            },
+                            session=db_session,
+                        )
+                    except Exception as audit_err:
+                        logger.warning("Failed to record RETRY_EXHAUSTED audit event: %s", audit_err)
+
                 logger.info(
                     "Halting retry loop for %s: %s (Status: %s)",
                     current_patch_id,
@@ -521,6 +586,27 @@ Instruction: Analyze the failure evidence above. Generate an improved patch that
             # Step 5: Build Structured Failure Feedback & Generate Next Candidate
             retries_used += 1
             next_attempt_num = current_attempt_num + 1
+
+            try:
+                self.audit_service.record_event(
+                    event_type=AuditEventType.RETRY_STARTED,
+                    workflow_id=workflow_id,
+                    vulnerability_id=vulnerability_id,
+                    patch_attempt_id=current_patch_id,
+                    validation_id=val_result.id,
+                    event_status=AuditEventStatus.INFO,
+                    message=f"Triggering retry attempt {next_attempt_num} (retry {retries_used}/{allowed_retries}) for patch {current_patch_id}.",
+                    metadata={
+                        "retry_number": retries_used,
+                        "next_attempt_number": next_attempt_num,
+                        "parent_patch_id": current_patch_id,
+                        "failure_category": decision.failure_category.value,
+                    },
+                    session=db_session,
+                )
+            except Exception as audit_err:
+                logger.warning("Failed to record RETRY_STARTED audit event: %s", audit_err)
+
             logger.info(
                 "Triggering retry attempt %d (Retry %d/%d) for patch %s",
                 next_attempt_num,

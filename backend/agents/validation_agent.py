@@ -25,6 +25,7 @@ from backend.database.models import (
     WorkflowModel,
     utc_now,
 )
+from backend.models.audit import AuditEventStatus, AuditEventType
 from backend.models.patch import PatchGenerationResult, PatchStatus
 from backend.models.retry import FailureCategory
 from backend.models.validation import (
@@ -38,6 +39,7 @@ from backend.models.vulnerability import (
     VulnerabilityFinding,
     VulnerabilityStatus,
 )
+from backend.services.audit import AuditService
 from backend.agents.scanning_agent import ScanningAgent
 from backend.tools.bandit_runner import BanditRunner
 from backend.tools.patch_applier import PatchApplier
@@ -66,6 +68,7 @@ class ValidationAgent:
         scanning_agent: Optional[ScanningAgent] = None,
         sandbox: Optional[SandboxExecutor] = None,
         test_timeout: Optional[int] = None,
+        audit_service: Optional[AuditService] = None,
     ):
         """
         Initialize Validation Agent.
@@ -89,6 +92,7 @@ class ValidationAgent:
             bandit_runner=self.bandit_runner,
             semgrep_runner=self.semgrep_runner,
         )
+        self.audit_service = audit_service or AuditService()
 
     def _run_syntax_check(self, workspace_path: Path) -> tuple[bool, str]:
         """
@@ -337,6 +341,19 @@ class ValidationAgent:
         validation_logs.append(f"Validation initialized for patch {patch_id} at {start_utc.isoformat()}.")
         validation_logs.append(f"Configured sandbox type: {self.sandbox.sandbox_type}.")
 
+        if persist:
+            self.audit_service.record_event(
+                event_type=AuditEventType.PATCH_VALIDATION_STARTED,
+                workflow_id=workflow_id,
+                vulnerability_id=vulnerability.id,
+                patch_attempt_id=patch_id,
+                validation_id=val_id,
+                event_status=AuditEventStatus.INFO,
+                message=f"Validation initiated for patch {patch_id} (Sandbox: {self.sandbox.sandbox_type}).",
+                metadata={"sandbox_type": self.sandbox.sandbox_type},
+                session=db_session,
+            )
+
         # Initial state machine tracking
         patch_applied = False
         syntax_passed = False
@@ -390,6 +407,18 @@ class ValidationAgent:
 
                 patch_applied = True
                 validation_logs.append("Candidate patch applied cleanly to workspace.")
+                if persist:
+                    self.audit_service.record_event(
+                        event_type=AuditEventType.PATCH_APPLIED,
+                        workflow_id=workflow_id,
+                        vulnerability_id=vulnerability.id,
+                        patch_attempt_id=patch_id,
+                        validation_id=val_id,
+                        event_status=AuditEventStatus.SUCCESS,
+                        message=f"Candidate patch {patch_id} applied cleanly to workspace.",
+                        metadata={"sandbox_type": self.sandbox.sandbox_type},
+                        session=db_session,
+                    )
 
                 # Step 4: Syntax / Compilation Verification via Sandbox
                 syn_ok, syn_msg = self._run_syntax_check(workspace)
@@ -752,12 +781,81 @@ class ValidationAgent:
             with session_scope() as session:
                 _update_entities(session)
 
+        # Audit event emission
+        if persist:
+            try:
+                if status == ValidationStatus.PASSED:
+                    meta = {
+                        "sandbox_type": result.sandbox_type,
+                        "syntax_check_passed": result.syntax_check_passed,
+                        "tests_passed": result.tests_passed,
+                        "tests_run": result.tests_run,
+                        "security_scan_passed": result.security_scan_passed,
+                        "original_vulnerability_resolved": result.original_vulnerability_resolved,
+                        "new_findings_count": result.new_findings_count,
+                        "duration": result.duration,
+                    }
+                    self.audit_service.record_event(
+                        event_type=AuditEventType.PATCH_VALIDATED,
+                        workflow_id=workflow_id,
+                        vulnerability_id=vulnerability.id,
+                        patch_attempt_id=patch_id,
+                        validation_id=val_id,
+                        event_status=AuditEventStatus.SUCCESS,
+                        message=f"Patch {patch_id} passed isolated validation verification.",
+                        metadata=meta,
+                        session=db_session,
+                    )
+                    # HARD BOUNDARY: Record READY_FOR_REVIEW (No automatic merge/approval)
+                    self.audit_service.record_event(
+                        event_type=AuditEventType.READY_FOR_REVIEW,
+                        workflow_id=workflow_id,
+                        vulnerability_id=vulnerability.id,
+                        patch_attempt_id=patch_id,
+                        validation_id=val_id,
+                        event_status=AuditEventStatus.SUCCESS,
+                        message=f"Patch {patch_id} for vulnerability {vulnerability.id} is validated and READY_FOR_REVIEW.",
+                        metadata={
+                            "vulnerability_id": vulnerability.id,
+                            "patch_attempt_id": patch_id,
+                            "validation_id": val_id,
+                            "action_required": "DEVELOPER_REVIEW",
+                        },
+                        session=db_session,
+                    )
+                else:
+                    meta = {
+                        "sandbox_type": result.sandbox_type,
+                        "syntax_check_passed": result.syntax_check_passed,
+                        "tests_passed": result.tests_passed,
+                        "tests_run": result.tests_run,
+                        "security_scan_passed": result.security_scan_passed,
+                        "original_vulnerability_resolved": result.original_vulnerability_resolved,
+                        "new_findings_count": result.new_findings_count,
+                        "failure_category": result.failure_category,
+                        "failure_reason": result.failure_reason,
+                        "duration": result.duration,
+                    }
+                    self.audit_service.record_event(
+                        event_type=AuditEventType.PATCH_VALIDATION_FAILED,
+                        workflow_id=workflow_id,
+                        vulnerability_id=vulnerability.id,
+                        patch_attempt_id=patch_id,
+                        validation_id=val_id,
+                        event_status=AuditEventStatus.FAILED,
+                        message=f"Patch {patch_id} validation failed: {result.failure_reason}",
+                        metadata=meta,
+                        session=db_session,
+                    )
+            except Exception as audit_err:
+                logger.warning("Failed to record validation audit event: %s", audit_err)
+
         logger.info(
-            "Validation run %s finished with status %s (Sandbox: %s, Duration: %.2fs)",
+            "Validation run %s complete for patch %s in %.3fs (Verdict: %s)",
             val_id,
-            status.value,
-            sandbox_type,
-            duration,
+            patch_id,
+            result.duration,
+            result.status.value,
         )
 
         return result

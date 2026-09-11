@@ -1,5 +1,6 @@
 """Service layer package."""
 
+from backend.services.audit import AuditService, sanitize_metadata
 from backend.services.repository import RepositoryService, RepositoryValidationError
 from backend.services.repository_context import RepositoryContextService
 from backend.services.risk_engine import RiskEngine
@@ -9,4 +10,6 @@ __all__ = [
     "RepositoryValidationError",
     "RepositoryContextService",
     "RiskEngine",
+    "AuditService",
+    "sanitize_metadata",
 ]

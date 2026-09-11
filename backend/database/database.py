@@ -25,6 +25,7 @@ Base = declarative_base()
 
 def init_db() -> None:
     """Initialize database tables and apply backward-compatible column migrations if needed."""
+    from backend.database import models  # noqa: F401
     Base.metadata.create_all(bind=engine)
 
     # Lightweight backward-compatible column migration for SQLite
@@ -68,6 +69,15 @@ def init_db() -> None:
                     if "failure_category" not in existing_val_cols:
                         conn.execute(text("ALTER TABLE validation_results ADD COLUMN failure_category VARCHAR"))
                     conn.commit()
+            except Exception:
+                pass
+
+            # 3. Audit events table verification
+            try:
+                res = conn.execute(text("PRAGMA table_info(audit_events)")).fetchall()
+                existing_audit_cols = {row[1] for row in res}
+                if not existing_audit_cols and "audit_events" in Base.metadata.tables:
+                    Base.metadata.tables["audit_events"].create(bind=engine, checkfirst=True)
             except Exception:
                 pass
 

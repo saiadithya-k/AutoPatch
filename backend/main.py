@@ -6,6 +6,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.api.routes.audit import router as audit_router
 from backend.api.routes.context import router as context_router
 from backend.api.routes.patch import router as patch_router
 from backend.api.routes.retry import router as retry_router
@@ -37,8 +38,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(
     title=settings.APP_NAME,
-    version="0.7.0",
-    description="AutoPatch Agentic AI Automated Vulnerability Remediation Platform - Bounded Patch Retry Loop",
+    version="0.8.0",
+    description="AutoPatch Agentic AI Automated Vulnerability Remediation Platform - Persistent Audit & Lineage",
     lifespan=lifespan
 )
 
@@ -58,6 +59,7 @@ app.include_router(context_router)
 app.include_router(patch_router)
 app.include_router(validation_router)
 app.include_router(retry_router)
+app.include_router(audit_router)
 
 
 @app.get(

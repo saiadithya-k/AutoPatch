@@ -41,6 +41,8 @@ from backend.models.vulnerability import (
     VulnerabilityStatus,
     WorkflowStatus,
 )
+from backend.models.audit import AuditEventStatus, AuditEventType
+from backend.services.audit import AuditService
 from backend.services.llm.exceptions import LLMError
 from backend.services.llm.schemas import (
     LLMCodeChange,
@@ -64,6 +66,7 @@ class PatchGenerationAgent:
         max_patch_files: Optional[int] = None,
         max_patch_lines: Optional[int] = None,
         max_patch_chars: Optional[int] = None,
+        audit_service: Optional[AuditService] = None,
     ):
         """
         Initialize Patch-Generation Agent.
@@ -80,6 +83,7 @@ class PatchGenerationAgent:
         self.max_patch_files = max_patch_files or settings.MAX_PATCH_FILES
         self.max_patch_lines = max_patch_lines or settings.MAX_PATCH_LINES
         self.max_patch_chars = max_patch_chars or settings.MAX_PATCH_CHARS
+        self.audit_service = audit_service or AuditService()
 
     def _load_prompt_template(self) -> str:
         """Safely load the patch generation system prompt template from disk."""
@@ -438,6 +442,23 @@ INSTRUCTION: Output MUST be a single valid JSON object adhering strictly to the 
         start_now = utc_now()
         patch_id = f"PATCH-{hashlib.sha256(f'{vulnerability.id}:{attempt_number}:{start_now.isoformat()}'.encode('utf-8')).hexdigest()[:8].upper()}"
 
+        if persist:
+            self.audit_service.record_event(
+                event_type=AuditEventType.PATCH_GENERATION_STARTED,
+                workflow_id=vulnerability.workflow_id,
+                vulnerability_id=vulnerability.id,
+                patch_attempt_id=patch_id,
+                event_status=AuditEventStatus.INFO,
+                message=f"Patch generation initiated for vulnerability {vulnerability.id} (attempt {attempt_number}).",
+                metadata={
+                    "attempt_number": attempt_number,
+                    "vulnerability_type": vulnerability.type,
+                    "file_path": vulnerability.file_path,
+                    "parent_patch_id": parent_patch_id,
+                },
+                session=db_session,
+            )
+
         logger.info(
             "Starting patch generation for %s (Attempt #%d, Workflow: %s)",
             vulnerability.id,
@@ -645,6 +666,39 @@ INSTRUCTION: Output MUST be a single valid JSON object adhering strictly to the 
         # 8. Persist Patch Attempt to Database
         if persist:
             self._persist_patch_attempt(result, db_session=db_session)
+            if patch_status == PatchStatus.GENERATED:
+                self.audit_service.record_event(
+                    event_type=AuditEventType.PATCH_GENERATED,
+                    workflow_id=vulnerability.workflow_id,
+                    vulnerability_id=vulnerability.id,
+                    patch_attempt_id=patch_id,
+                    event_status=AuditEventStatus.SUCCESS,
+                    message=f"Candidate patch synthesized for {vulnerability.id} affecting {len(changed_files)} file(s).",
+                    metadata={
+                        "attempt_number": attempt_number,
+                        "files_changed": changed_files,
+                        "generation_model": model_name,
+                        "generation_provider": provider_name,
+                        "status": patch_status.value,
+                    },
+                    session=db_session,
+                )
+            else:
+                self.audit_service.record_event(
+                    event_type=AuditEventType.PATCH_GENERATION_FAILED,
+                    workflow_id=vulnerability.workflow_id,
+                    vulnerability_id=vulnerability.id,
+                    patch_attempt_id=patch_id,
+                    event_status=AuditEventStatus.FAILED,
+                    message=f"Candidate patch rejected during safety validation for {vulnerability.id}.",
+                    metadata={
+                        "attempt_number": attempt_number,
+                        "files_changed": changed_files,
+                        "warnings": warnings,
+                        "status": patch_status.value,
+                    },
+                    session=db_session,
+                )
 
         logger.info(
             "Patch generation finished for %s (Patch: %s, Status: %s, Changes: %d files)",
@@ -693,6 +747,23 @@ INSTRUCTION: Output MUST be a single valid JSON object adhering strictly to the 
 
         if persist:
             self._persist_patch_attempt(result, db_session=db_session)
+            try:
+                self.audit_service.record_event(
+                    event_type=AuditEventType.PATCH_GENERATION_FAILED,
+                    workflow_id=vulnerability.workflow_id,
+                    vulnerability_id=vulnerability.id,
+                    patch_attempt_id=patch_id,
+                    event_status=AuditEventStatus.FAILED,
+                    message=f"Patch generation failed for {vulnerability.id}: {'; '.join(warnings)}",
+                    metadata={
+                        "attempt_number": attempt_number,
+                        "warnings": warnings,
+                        "status": PatchStatus.FAILED.value,
+                    },
+                    session=db_session,
+                )
+            except Exception as audit_err:
+                logger.warning("Failed to record PATCH_GENERATION_FAILED audit event: %s", audit_err)
 
         return result
 

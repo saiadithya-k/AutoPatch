@@ -27,6 +27,8 @@ from backend.models.vulnerability import (
     VulnerabilityStatus,
     WorkflowStatus,
 )
+from backend.models.audit import AuditEventStatus, AuditEventType
+from backend.services.audit import AuditService
 from backend.services.repository import RepositoryService, RepositoryValidationError
 from backend.tools.bandit_runner import BanditResult, BanditRunner
 from backend.tools.semgrep_runner import SemgrepResult, SemgrepRunner
@@ -42,10 +44,12 @@ class ScanningAgent:
         bandit_runner: Optional[BanditRunner] = None,
         semgrep_runner: Optional[SemgrepRunner] = None,
         repository_service: Optional[RepositoryService] = None,
+        audit_service: Optional[AuditService] = None,
     ):
         self.bandit_runner = bandit_runner or BanditRunner()
         self.semgrep_runner = semgrep_runner or SemgrepRunner()
         self.repository_service = repository_service or RepositoryService()
+        self.audit_service = audit_service or AuditService()
 
     def _normalize_path(self, file_path_str: str, repo_root: Path) -> str:
         """
@@ -310,6 +314,14 @@ class ScanningAgent:
         # 2. Record initial workflow state in database
         if persist:
             self._record_started_workflow(workflow_id, str(validated_path), db_session=db_session)
+            self.audit_service.record_event(
+                event_type=AuditEventType.SCAN_STARTED,
+                workflow_id=workflow_id,
+                event_status=AuditEventStatus.INFO,
+                message=f"Static security scan initiated for repository '{validated_path}'.",
+                metadata={"repository_path": str(validated_path)},
+                session=db_session,
+            )
 
         all_findings: list[VulnerabilityFinding] = []
         scanner_metadata: dict[str, Any] = {
@@ -404,6 +416,30 @@ class ScanningAgent:
                 error_message=err_msg,
                 db_session=db_session
             )
+            if scan_status == "COMPLETED":
+                ev_type = AuditEventType.SCAN_COMPLETED
+                ev_status = AuditEventStatus.SUCCESS
+            elif scan_status == "DEGRADED":
+                ev_type = AuditEventType.SCAN_DEGRADED
+                ev_status = AuditEventStatus.WARNING
+            else:
+                ev_type = AuditEventType.SCAN_FAILED
+                ev_status = AuditEventStatus.FAILED
+
+            self.audit_service.record_event(
+                event_type=ev_type,
+                workflow_id=workflow_id,
+                event_status=ev_status,
+                message=f"Static security scan finished with status '{scan_status}'. Discovered {len(normalized_findings)} findings.",
+                metadata={
+                    "scanner_status": scan_status,
+                    "finding_count": len(normalized_findings),
+                    "duration": round(elapsed, 2),
+                    "bandit_findings_count": len(bandit_result.findings) if bandit_result and bandit_result.findings else 0,
+                    "semgrep_findings_count": len(semgrep_result.findings) if semgrep_result and semgrep_result.findings else 0,
+                },
+                session=db_session,
+            )
 
         logger.info(
             "Scan %s for workflow %s: %d findings discovered in %.2fs (Status: %s)",
@@ -468,6 +504,17 @@ class ScanningAgent:
                 wf.completed_at = now
 
         self._execute_in_session(db_session, _do)
+        try:
+            self.audit_service.record_event(
+                event_type=AuditEventType.SCAN_FAILED,
+                workflow_id=workflow_id,
+                event_status=AuditEventStatus.FAILED,
+                message=f"Scan failed: {error_msg}",
+                metadata={"repository_path": repo_path, "error": error_msg},
+                session=db_session,
+            )
+        except Exception as audit_err:
+            logger.warning("Failed to record SCAN_FAILED audit event: %s", audit_err)
 
     def _persist_findings(
         self,

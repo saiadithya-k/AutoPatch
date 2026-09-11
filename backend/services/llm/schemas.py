@@ -17,7 +17,7 @@ class LLMResponse(BaseModel):
     content: str = Field(description="Raw text content produced by the model")
     parsed: Optional[Any] = Field(default=None, description="Validated Pydantic model instance if schema was provided")
     model: str = Field(default="", description="Model identifier used for inference")
-    usage: dict[str, int] = Field(default_factory=dict, description="Token usage statistics")
+    usage: dict[str, Any] = Field(default_factory=dict, description="Token usage statistics")
     raw_response: Optional[dict[str, Any]] = Field(default=None, description="Raw provider response payload")
 
 

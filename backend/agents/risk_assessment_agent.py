@@ -6,10 +6,12 @@ and persists prioritized findings to the database.
 """
 
 import logging
+import time
 from typing import Any, Optional
 
 from backend.database.database import session_scope
 from backend.database.models import RiskAssessmentModel, VulnerabilityModel, WorkflowModel, utc_now
+from backend.models.audit import AuditEventStatus, AuditEventType
 from backend.models.risk_assessment import (
     AssessmentMethod,
     PrioritizedVulnerability,
@@ -20,6 +22,7 @@ from backend.models.vulnerability import (
     VulnerabilityStatus,
     WorkflowStatus,
 )
+from backend.services.audit import AuditService
 from backend.services.llm.service import LLMService
 from backend.services.risk_engine import RiskEngine
 
@@ -34,6 +37,7 @@ class RiskAssessmentAgent:
         risk_engine: Optional[RiskEngine] = None,
         llm_service: Optional[LLMService] = None,
         enable_llm: bool = False,
+        audit_service: Optional[AuditService] = None,
     ):
         """
         Initialize Risk-Assessment Agent with risk calculation engine and optional LLM service.
@@ -41,10 +45,12 @@ class RiskAssessmentAgent:
         :param risk_engine: Deterministic risk engine instance.
         :param llm_service: Optional LLM service for structured contextual enhancement.
         :param enable_llm: Whether to invoke LLM contextual reasoning.
+        :param audit_service: Optional audit event logging service.
         """
         self.risk_engine = risk_engine or RiskEngine()
         self.llm_service = llm_service
         self.enable_llm = enable_llm
+        self.audit_service = audit_service or AuditService()
 
     def assess(
         self,
@@ -75,6 +81,19 @@ class RiskAssessmentAgent:
             logger.info("No vulnerability findings supplied for risk assessment.")
             return []
 
+        start_time = time.time()
+        target_wf_id = workflow_id or (findings[0].workflow_id if findings else None)
+
+        if persist:
+            self.audit_service.record_event(
+                event_type=AuditEventType.RISK_ASSESSMENT_STARTED,
+                workflow_id=target_wf_id,
+                event_status=AuditEventStatus.INFO,
+                message=f"Risk assessment started for {len(findings)} findings.",
+                metadata={"finding_count": len(findings)},
+                session=db_session,
+            )
+
         logger.info(
             "Starting risk assessment for %d findings (Workflow: %s, LLM Enabled: %s)",
             len(findings),
@@ -82,89 +101,116 @@ class RiskAssessmentAgent:
             self.enable_llm,
         )
 
-        assessed_pairs: list[tuple[VulnerabilityFinding, RiskAssessment]] = []
+        try:
+            assessed_pairs: list[tuple[VulnerabilityFinding, RiskAssessment]] = []
 
-        for finding in findings:
-            # 1. Transition: DETECTED -> ASSESSED
-            finding.status = VulnerabilityStatus.ASSESSED
+            for finding in findings:
+                # 1. Transition: DETECTED -> ASSESSED
+                finding.status = VulnerabilityStatus.ASSESSED
 
-            # 2. Compute deterministic risk assessment
-            assessment = self.risk_engine.assess_finding(
-                finding=finding,
-                workflow_id=workflow_id or finding.workflow_id
-            )
-
-            # 3. Optional structured LLM contextual enhancement
-            if self.enable_llm and self.llm_service and self.llm_service.is_configured:
-                try:
-                    llm_analysis = self.llm_service.enhance_risk_reasoning(
-                        finding=finding,
-                        baseline_reasoning=assessment.reasoning,
-                    )
-                    if llm_analysis:
-                        combined_reasoning = LLMService.format_hybrid_reasoning(
-                            baseline_reasoning=assessment.reasoning,
-                            llm_analysis=llm_analysis,
-                        )
-                        assessment.reasoning = combined_reasoning
-                        assessment.assessment_method = AssessmentMethod.HYBRID_LLM
-                        assessment.model = self.llm_service.provider.model if self.llm_service.provider else "llm"
-                except Exception as e:
-                    logger.warning(
-                        "LLM contextual reasoning failed for %s, safely falling back to deterministic baseline: %s",
-                        finding.id,
-                        e,
-                    )
-
-            # 4. Transition: ASSESSED -> PRIORITIZED & enrich finding
-            finding.status = VulnerabilityStatus.PRIORITIZED
-            finding.exploitability = assessment.exploitability
-            finding.business_impact = assessment.business_impact
-            finding.risk_score = assessment.risk_score
-            finding.priority = assessment.priority.value
-            finding.risk_reasoning = assessment.reasoning
-
-            assessed_pairs.append((finding, assessment))
-
-            logger.debug(
-                "Assessed %s: Score=%.2f, Priority=%s",
-                finding.id,
-                assessment.risk_score,
-                assessment.priority.value
-            )
-
-        # 4. Sort descending by risk score (highest risk first)
-        assessed_pairs.sort(key=lambda pair: pair[1].risk_score, reverse=True)
-
-        # 5. Build ranked PrioritizedVulnerability models
-        prioritized_results: list[PrioritizedVulnerability] = []
-        for rank_idx, (finding, assessment) in enumerate(assessed_pairs, start=1):
-            prioritized_results.append(
-                PrioritizedVulnerability(
-                    vulnerability=finding,
-                    risk_assessment=assessment,
-                    rank=rank_idx
+                # 2. Compute deterministic risk assessment
+                assessment = self.risk_engine.assess_finding(
+                    finding=finding,
+                    workflow_id=workflow_id or finding.workflow_id
                 )
+
+                # 3. Optional structured LLM contextual enhancement
+                if self.enable_llm and self.llm_service and self.llm_service.is_configured:
+                    try:
+                        llm_analysis = self.llm_service.enhance_risk_reasoning(
+                            finding=finding,
+                            baseline_reasoning=assessment.reasoning,
+                        )
+                        if llm_analysis:
+                            combined_reasoning = LLMService.format_hybrid_reasoning(
+                                baseline_reasoning=assessment.reasoning,
+                                llm_analysis=llm_analysis,
+                            )
+                            assessment.reasoning = combined_reasoning
+                            assessment.assessment_method = AssessmentMethod.HYBRID_LLM
+                            assessment.model = self.llm_service.provider.model if self.llm_service.provider else "llm"
+                    except Exception as e:
+                        logger.warning(
+                            "LLM contextual reasoning failed for %s, safely falling back to deterministic baseline: %s",
+                            finding.id,
+                            e,
+                        )
+
+                # 4. Transition: ASSESSED -> PRIORITIZED & enrich finding
+                finding.status = VulnerabilityStatus.PRIORITIZED
+                finding.exploitability = assessment.exploitability
+                finding.business_impact = assessment.business_impact
+                finding.risk_score = assessment.risk_score
+                finding.priority = assessment.priority.value
+                finding.risk_reasoning = assessment.reasoning
+
+                assessed_pairs.append((finding, assessment))
+
+                logger.debug(
+                    "Assessed %s: Score=%.2f, Priority=%s",
+                    finding.id,
+                    assessment.risk_score,
+                    assessment.priority.value
+                )
+
+            # 4. Sort descending by risk score (highest risk first)
+            assessed_pairs.sort(key=lambda pair: pair[1].risk_score, reverse=True)
+
+            # 5. Build ranked PrioritizedVulnerability models
+            prioritized_results: list[PrioritizedVulnerability] = []
+            for rank_idx, (finding, assessment) in enumerate(assessed_pairs, start=1):
+                prioritized_results.append(
+                    PrioritizedVulnerability(
+                        vulnerability=finding,
+                        risk_assessment=assessment,
+                        rank=rank_idx
+                    )
+                )
+
+            # 6. Persist to database
+            if persist:
+                self._persist_assessments(
+                    workflow_id=target_wf_id,
+                    prioritized_list=prioritized_results,
+                    db_session=db_session
+                )
+                elapsed = time.time() - start_time
+                self.audit_service.record_event(
+                    event_type=AuditEventType.RISK_ASSESSMENT_COMPLETED,
+                    workflow_id=target_wf_id,
+                    event_status=AuditEventStatus.SUCCESS,
+                    message=f"Risk assessment completed for {len(findings)} findings. Prioritized {len(prioritized_results)} findings.",
+                    metadata={
+                        "finding_count": len(findings),
+                        "prioritized_count": len(prioritized_results),
+                        "duration": round(elapsed, 2),
+                    },
+                    session=db_session,
+                )
+
+            logger.info(
+                "Risk assessment complete for %d findings. Top risk: %s (Score: %.2f, Priority: %s)",
+                len(prioritized_results),
+                prioritized_results[0].vulnerability.id if prioritized_results else "N/A",
+                prioritized_results[0].risk_assessment.risk_score if prioritized_results else 0.0,
+                prioritized_results[0].risk_assessment.priority.value if prioritized_results else "N/A"
             )
 
-        # 6. Persist to database
-        if persist:
-            target_wf_id = workflow_id or (findings[0].workflow_id if findings else None)
-            self._persist_assessments(
-                workflow_id=target_wf_id,
-                prioritized_list=prioritized_results,
-                db_session=db_session
-            )
-
-        logger.info(
-            "Risk assessment complete for %d findings. Top risk: %s (Score: %.2f, Priority: %s)",
-            len(prioritized_results),
-            prioritized_results[0].vulnerability.id if prioritized_results else "N/A",
-            prioritized_results[0].risk_assessment.risk_score if prioritized_results else 0.0,
-            prioritized_results[0].risk_assessment.priority.value if prioritized_results else "N/A"
-        )
-
-        return prioritized_results
+            return prioritized_results
+        except Exception as e:
+            if persist:
+                try:
+                    self.audit_service.record_event(
+                        event_type=AuditEventType.RISK_ASSESSMENT_FAILED,
+                        workflow_id=target_wf_id,
+                        event_status=AuditEventStatus.FAILED,
+                        message=f"Risk assessment failed: {str(e)}",
+                        metadata={"error": str(e)},
+                        session=db_session,
+                    )
+                except Exception:
+                    pass
+            raise
 
     def assess_workflow(
         self,

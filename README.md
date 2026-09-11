@@ -14,6 +14,7 @@ AutoPatch is an agentic AI system for automated software vulnerability detection
 - **Phase 6–8**: **Validation Agent & Tooling** (**COMPLETED & FINALIZED**).
 - **Phase 9**: **Production Docker Sandbox & Security Hardening** (**COMPLETED & FINALIZED**).
 - **Phase 10**: **Bounded Patch Retry Loop & Audit Lineage** (**COMPLETED & FINALIZED**).
+- **Phase 11**: **Database & Persistent Audit Lineage** (**COMPLETED & FINALIZED**).
 - **Active Pipeline**:
   $$\text{Repository} \longrightarrow \text{Scanning Agent} \longrightarrow \text{Risk Assessment} \longrightarrow \text{Context Service} \longrightarrow \text{Patch Generation} \longrightarrow \text{Validation Agent (Sandbox)} \longrightarrow \begin{cases} \text{PASS} \implies \text{READY\_FOR\_REVIEW} \\ \text{FAIL} \implies \text{RetryAgent} \longrightarrow \text{Patch Generation} \longrightarrow \text{Re-Validate} \end{cases}$$
 
@@ -92,6 +93,8 @@ AutoPatch is an agentic AI system for automated software vulnerability detection
                                │ • vulnerabilities        │
                                │ • risk_assessments       │
                                │ • patch_attempts         │
+                               │ • validation_results     │
+                               │ • audit_events           │
                                └────────────┬─────────────┘
                                             │
                                             ▼
@@ -319,6 +322,34 @@ Interactive OpenAPI documentation: [http://127.0.0.1:8000/docs](http://127.0.0.1
 - `GET /api/patches/{patch_id}/validation` — Get latest validation outcome for a patch attempt.
 - `GET /api/validations/{validation_id}` — Get detailed validation audit record with test and scan output.
 - `GET /api/risk-assessments` — List and filter risk assessments.
+- `POST /api/patches/{patch_id}/retry` — Execute bounded patch retry loop.
+- `GET /api/patches/{patch_id}/retry-history` — Retrieve full ancestral lineage chain of retry attempts.
+- `GET /api/audit/events` — Query and filter lifecycle audit events across all phases.
+- `GET /api/audit/events/{event_id}` — Retrieve detailed audit event record with sanitized metadata.
+- `GET /api/workflows/{workflow_id}/audit` — Retrieve complete chronological audit timeline for a workflow.
+
+---
+
+## 📜 Phase 11 — Persistent Lifecycle Audit & Lineage
+
+AutoPatch records every lifecycle transition to the `audit_events` table via the centralized `AuditService`.
+
+### Core Lifecycle Event Types
+| Phase | Event Types | Description |
+| :--- | :--- | :--- |
+| **Workflow** | `WORKFLOW_CREATED`, `SYSTEM_ERROR` | Workflow orchestration checkpoints |
+| **Scanning** | `SCAN_STARTED`, `SCAN_COMPLETED`, `SCAN_DEGRADED`, `SCAN_FAILED` | SAST scan execution status and finding counts |
+| **Risk Assessment**| `RISK_ASSESSMENT_STARTED`, `RISK_ASSESSMENT_COMPLETED`, `RISK_ASSESSMENT_FAILED` | Prioritization metrics and duration |
+| **Context** | `CONTEXT_CREATED`, `CONTEXT_FAILED` | AST and bounded window retrieval |
+| **Patch Generation**| `PATCH_GENERATION_STARTED`, `PATCH_GENERATED`, `PATCH_GENERATION_FAILED` | Candidate synthesis and diff safety gating |
+| **Validation** | `PATCH_VALIDATION_STARTED`, `PATCH_APPLIED`, `PATCH_VALIDATION_FAILED`, `PATCH_VALIDATED` | Sandbox compilation, pytest, and differential SAST |
+| **Retry Loop** | `RETRY_DECISION`, `RETRY_STARTED`, `RETRY_EXHAUSTED`, `NO_PROGRESS` | Deterministic retry evaluation and recursion protection |
+| **Human Review** | `READY_FOR_REVIEW` | **Hard Boundary**: Signals developer review required (no auto-merge/PR) |
+
+### Automated Secret Redaction
+All audit event metadata passes through recursive key sanitization before persistence:
+- Sensitive keys matching `password`, `passwd`, `secret`, `token`, `api_key`, `apikey`, `authorization`, `cookie`, `private_key` are replaced with `"[REDACTED]"`.
+- Raw prompt texts, credentials, and full environment variables are strictly prevented from database persistence.
 
 ---
 
@@ -337,10 +368,22 @@ python -m pytest -q tests/unit
 python -m pytest -q tests/integration
 ```
 
+### Scanner & Sandbox Prerequisites
+- **Bandit & Semgrep**: The static analysis tests require Bandit and Semgrep in the environment:
+  ```powershell
+  python -m pip install bandit semgrep
+  ```
+- **Docker Validation Sandbox (Optional)**:
+  Build the containerized sandbox image to run isolated validations in production mode:
+  ```powershell
+  docker build -t autopatch-validator:latest -f docker/Dockerfile .
+  ```
+
 ---
 
 ## 🔭 Future Phases Roadmap
 
-- **Phase 10**: Feedback-Driven Retry Loop (AutoPatch retry controller consuming `ValidationResult`).
-- **Phase 11**: Developer Security Dashboard (React).
-- **Phase 12**: Git/GitHub Integration & CI/CD Actions.
+- **Phase 12**: Clean Orchestration Pipeline (single workflow invocation).
+- **Phase 13**: End-to-End FastAPI Workflow Lifecycle.
+- **Phase 14**: Developer Security Dashboard (React UI).
+- **Phase 15**: Human Review & Approval Flow.

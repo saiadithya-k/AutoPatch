@@ -46,6 +46,13 @@ from backend.models.retry import (
     RetryLoopResult,
     RetryStatus,
 )
+from backend.models.audit import (
+    AuditEventFilter,
+    AuditEventRecord,
+    AuditEventStatus,
+    AuditEventType,
+    WorkflowAuditTimeline,
+)
 
 __all__ = [
     "Severity",
@@ -83,4 +90,9 @@ __all__ = [
     "RetryDecision",
     "RetryAttemptRecord",
     "RetryLoopResult",
+    "AuditEventType",
+    "AuditEventStatus",
+    "AuditEventRecord",
+    "AuditEventFilter",
+    "WorkflowAuditTimeline",
 ]

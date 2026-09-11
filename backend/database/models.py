@@ -57,6 +57,12 @@ class WorkflowModel(Base):
         back_populates="workflow",
         cascade="all, delete-orphan"
     )
+    audit_events = relationship(
+        "AuditEventModel",
+        back_populates="workflow",
+        cascade="all, delete-orphan",
+        order_by="AuditEventModel.created_at.asc()"
+    )
 
 
 class VulnerabilityModel(Base):
@@ -98,6 +104,10 @@ class VulnerabilityModel(Base):
         "PatchAttemptModel",
         back_populates="vulnerability",
         cascade="all, delete-orphan"
+    )
+    audit_events = relationship(
+        "AuditEventModel",
+        back_populates="vulnerability"
     )
 
     def set_raw_finding(self, data: dict) -> None:
@@ -168,6 +178,10 @@ class PatchAttemptModel(Base):
         cascade="all, delete-orphan",
         order_by="ValidationResultModel.started_at.asc()",
     )
+    audit_events = relationship(
+        "AuditEventModel",
+        back_populates="patch_attempt"
+    )
 
     def set_files_changed(self, files: list[str]) -> None:
         self.files_changed = json.dumps(files) if files else "[]"
@@ -223,4 +237,39 @@ class ValidationResultModel(Base):
 
     # Relationships
     patch_attempt = relationship("PatchAttemptModel", back_populates="validation_results")
+    audit_events = relationship(
+        "AuditEventModel",
+        back_populates="validation_result"
+    )
+
+
+class AuditEventModel(Base):
+    """SQLAlchemy model representing an immutable lifecycle audit event across the AutoPatch pipeline."""
+
+    __tablename__ = "audit_events"
+
+    id = Column(String, primary_key=True, index=True)
+    workflow_id = Column(String, ForeignKey("workflows.id", ondelete="CASCADE"), nullable=True, index=True)
+    vulnerability_id = Column(String, ForeignKey("vulnerabilities.id", ondelete="SET NULL"), nullable=True, index=True)
+    patch_attempt_id = Column(String, ForeignKey("patch_attempts.id", ondelete="SET NULL"), nullable=True, index=True)
+    validation_id = Column(String, ForeignKey("validation_results.id", ondelete="SET NULL"), nullable=True, index=True)
+    event_type = Column(String, nullable=False, index=True)
+    event_status = Column(String, nullable=False, default="SUCCESS")
+    message = Column(Text, nullable=True)
+    metadata_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False, index=True)
+
+    # Relationships
+    workflow = relationship("WorkflowModel", back_populates="audit_events")
+    vulnerability = relationship("VulnerabilityModel", back_populates="audit_events")
+    patch_attempt = relationship("PatchAttemptModel", back_populates="audit_events")
+    validation_result = relationship("ValidationResultModel", back_populates="audit_events")
+
+    def set_metadata(self, data: Optional[dict[str, Any]]) -> None:
+        """Store metadata dictionary as JSON string."""
+        self.metadata_json = json.dumps(data) if data else None
+
+    def get_metadata(self) -> dict[str, Any]:
+        """Retrieve metadata dictionary."""
+        return json.loads(self.metadata_json) if self.metadata_json else {}
 

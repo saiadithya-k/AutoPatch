@@ -51,9 +51,10 @@ class Settings(BaseSettings):
     MAX_PATCH_LINES: int = Field(default=200, description="Maximum lines in a candidate unified diff")
     MAX_PATCH_CHARS: int = Field(default=20000, description="Maximum characters in a candidate unified diff")
 
-    # LLM Settings (for future phases)
+    # LLM Settings
     LLM_PROVIDER: str = Field(default="openai", description="LLM provider name")
     LLM_MODEL: str = Field(default="gpt-4o", description="LLM model identifier")
+    LLM_BASE_URL: Optional[str] = Field(default=None, description="Custom LLM API base URL (e.g. http://localhost:11434/v1 for Ollama)")
     OPENAI_API_KEY: Optional[str] = Field(default=None, description="OpenAI API key")
     ANTHROPIC_API_KEY: Optional[str] = Field(default=None, description="Anthropic API key")
 
