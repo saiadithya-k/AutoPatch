@@ -100,11 +100,11 @@ class MockLLMProvider(LLMProvider):
                             "file_path": "app.py",
                             "start_line": 14,
                             "end_line": 14,
-                            "original_code": "return os.system(command)",
-                            "replacement_code": "import subprocess\nreturn subprocess.run(shlex.split(command), check=True).returncode",
+                            "original_code": "    return os.system(command)",
+                            "replacement_code": "    import shlex\n    return subprocess.run(shlex.split(command), check=True).returncode",
                         }
                     ],
-                    "unified_diff": "--- a/app.py\n+++ b/app.py\n@@ -14,1 +14,2 @@\n-return os.system(command)\n+import subprocess\n+return subprocess.run(shlex.split(command), check=True).returncode",
+                    "unified_diff": "",
                     "assumptions": ["subprocess and shlex available in stdlib"],
                     "tests_to_run": ["test_execute_system_diagnostic"],
                 })

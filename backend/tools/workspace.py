@@ -28,6 +28,9 @@ DEFAULT_IGNORED_DIRS = {
     ".tox",
     "venv",
     ".venv",
+    ".venv-runtime",
+    ".test-artifacts",
+    ".test-tmp",
     "env",
     "node_modules",
 }

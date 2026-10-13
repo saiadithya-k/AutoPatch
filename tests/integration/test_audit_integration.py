@@ -16,6 +16,7 @@ Verifies:
 """
 
 from pathlib import Path
+from datetime import timedelta
 from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
@@ -26,7 +27,6 @@ from backend.agents.retry_agent import RetryAgent
 from backend.agents.risk_assessment_agent import RiskAssessmentAgent
 from backend.agents.scanning_agent import ScanningAgent
 from backend.agents.validation_agent import ValidationAgent
-from backend.database.database import SessionLocal
 from backend.database.models import (
     AuditEventModel,
     PatchAttemptModel,
@@ -128,14 +128,14 @@ class TestAuditIntegrationLifecycle:
             findings=[{"test_id": "B605", "filename": "app.py", "line_number": 4, "code": "os.system(cmd)", "issue_severity": "HIGH"}],
             exit_code=0,
             success=True,
-            raw_output={},
+            stdout="{}",
         )
         mock_semgrep = MagicMock(spec=SemgrepRunner)
         mock_semgrep.run.return_value = SemgrepResult(
             findings=[],
             exit_code=0,
             success=True,
-            raw_output={},
+            stdout="{}",
         )
 
         agent = ScanningAgent(
@@ -201,8 +201,8 @@ class TestAuditIntegrationLifecycle:
                         "file_path": "app.py",
                         "start_line": 4,
                         "end_line": 4,
-                        "original_code": "return os.system(cmd)",
-                        "replacement_code": "return subprocess.run([cmd], shell=False).returncode"
+                        "original_code": "    return os.system(cmd)",
+                        "replacement_code": "    return subprocess.run([cmd], shell=False).returncode"
                     }
                 ],
                 "unified_diff": "--- a/app.py\\n+++ b/app.py\\n@@ -4,1 +4,1 @@\\n-return os.system(cmd)\\n+return subprocess.run([cmd], shell=False).returncode\\n",
@@ -214,9 +214,12 @@ class TestAuditIntegrationLifecycle:
         agent = PatchGenerationAgent(llm_service=llm_service)
 
         risk_assessment = RiskAssessment(
+            id="RISK-AUDIT-01",
             vulnerability_id=finding.id,
             workflow_id=wf_id,
             severity="HIGH",
+            severity_score=8.0,
+            context_score=1.0,
             exploitability=0.8,
             business_impact=0.8,
             risk_score=8.5,
@@ -227,6 +230,8 @@ class TestAuditIntegrationLifecycle:
         context = RepositoryContext(
             vulnerability_id=finding.id,
             vulnerable_file="app.py",
+            line_start=4,
+            line_end=4,
             surrounding_code="def run_cmd(cmd):\n    return os.system(cmd)\n",
             context_window_start=1,
             context_window_end=4,
@@ -281,10 +286,12 @@ class TestAuditIntegrationLifecycle:
             tests_skipped=0,
             duration=0.5,
             error_message=None,
+            stdout="5 passed",
+            stderr="",
         )
 
         mock_scan_agent = MagicMock()
-        mock_scan_agent.scan.return_value = ([], {"scan_status": "COMPLETED", "errors": []})
+        mock_scan_agent.scan.return_value = ([], {"scan_status": "COMPLETED", "coverage_complete": True, "bandit": {"success": True}, "semgrep": {"success": True}, "errors": []})
 
         agent = ValidationAgent(
             test_runner=mock_test_runner,
@@ -473,6 +480,9 @@ class TestAuditAPIIntegration:
             workflow_id=wf_id,
             session=db_session,
         )
+        # Windows clocks can give successive events identical timestamps.
+        e2.created_at = e1.created_at + timedelta(seconds=1)
+        e3.created_at = e1.created_at + timedelta(seconds=2)
         db_session.commit()
 
         response = client.get(f"/api/workflows/{wf_id}/audit")
@@ -552,7 +562,7 @@ class TestAuditAPIIntegration:
         event_id = event.id
 
         # Verify query in a brand-new database session
-        new_session = SessionLocal()
+        new_session = Session(bind=db_session.get_bind())
         try:
             fetched = service.get_event(event_id, session=new_session)
             assert fetched is not None

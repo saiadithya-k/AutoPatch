@@ -16,9 +16,14 @@ RUN groupadd -g 10001 validator && \
 
 # Install security scanners and test tooling with pinned versions
 RUN pip install --no-cache-dir \
-    pytest==7.4.3 \
-    bandit==1.7.5 \
-    semgrep==1.50.0
+    pytest==9.1.1 \
+    bandit==1.9.4 \
+    semgrep==1.177.0
+
+# Offline rules are baked into the image, outside the writable target workspace.
+# Build from repository root: docker build -f docker/validation/Dockerfile -t autopatch-validator .
+COPY backend/tools/semgrep_rules /opt/autopatch/rules
+ENV SEMGREP_SEND_METRICS=off
 
 # Set workspace directory inside container
 WORKDIR /workspace

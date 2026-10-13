@@ -39,6 +39,14 @@ class WorkflowModel(Base):
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     error_message = Column(Text, nullable=True)
+    processed_findings = Column(Integer, nullable=False, default=0)
+    total_findings = Column(Integer, nullable=False, default=0)
+    reviewable_count = Column(Integer, nullable=False, default=0)
+    failed_count = Column(Integer, nullable=False, default=0)
+    outcome = Column(String, nullable=True)
+    errors_json = Column(Text, nullable=True)
+    request_json = Column(Text, nullable=True)
+    scan_metadata = Column(Text, nullable=True)
 
     # Relationships
     vulnerabilities = relationship(
@@ -230,6 +238,7 @@ class ValidationResultModel(Base):
     failure_reason = Column(Text, nullable=True)
     failure_category = Column(String, nullable=True, index=True)
     validation_logs = Column(Text, nullable=True)
+    scanner_metadata = Column(Text, nullable=True)
     sandbox_type = Column(String, default="local_workspace_dev_fallback", nullable=True)
     duration = Column(Float, default=0.0, nullable=False)
     started_at = Column(DateTime, default=utc_now, nullable=False)
@@ -241,6 +250,18 @@ class ValidationResultModel(Base):
         "AuditEventModel",
         back_populates="validation_result"
     )
+
+
+class ReviewDecisionModel(Base):
+    """One immutable human decision about an exact proposal and validation."""
+    __tablename__ = "review_decisions"
+    id = Column(String, primary_key=True)
+    patch_attempt_id = Column(String, ForeignKey("patch_attempts.id"), nullable=False, unique=True)
+    validation_id = Column(String, ForeignKey("validation_results.id"), nullable=True)
+    decision = Column(String, nullable=False)
+    reviewer_label = Column(String, nullable=False)
+    comment = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
 
 
 class AuditEventModel(Base):

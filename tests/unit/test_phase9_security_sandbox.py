@@ -446,7 +446,9 @@ def test_s_test_failure(temp_repo: Path, sample_finding: VulnerabilityFinding):
         error_message="1 test failed",
     )
 
-    agent = ValidationAgent(test_runner=mock_runner)
+    scanner = MagicMock()
+    scanner.scan.return_value = ([], {"scan_status": "COMPLETED", "coverage_complete": True})
+    agent = ValidationAgent(test_runner=mock_runner, scanning_agent=scanner)
     res = agent.execute_validation(
         patch_id="patch-test-fail",
         vulnerability=sample_finding,
@@ -486,7 +488,7 @@ def test_t_scanner_failure(temp_repo: Path, sample_finding: VulnerabilityFinding
         repository_path=temp_repo,
         persist=False,
     )
-    assert res.status == ValidationStatus.FAILED
+    assert res.status == ValidationStatus.ERROR
     assert res.security_scan_passed is False
     assert "security re-scan failed" in res.failure_reason.lower()
 
@@ -508,7 +510,7 @@ def test_u_unresolved_vulnerability(temp_repo: Path, sample_finding: Vulnerabili
 
     # Scanner still reports the finding
     mock_scanner = MagicMock()
-    mock_scanner.scan.return_value = ([sample_finding], {"scan_status": "COMPLETED", "errors": []})
+    mock_scanner.scan.return_value = ([sample_finding], {"scan_status": "COMPLETED", "coverage_complete": True, "errors": []})
     mock_scanner.scan_repository.return_value = mock_scanner.scan.return_value
 
     agent = ValidationAgent(test_runner=mock_runner, scanning_agent=mock_scanner)
@@ -551,7 +553,7 @@ def test_v_new_vulnerability_introduced(temp_repo: Path, sample_finding: Vulnera
     )
 
     mock_scanner = MagicMock()
-    mock_scanner.scan.return_value = ([new_finding], {"scan_status": "COMPLETED", "errors": []})
+    mock_scanner.scan.return_value = ([new_finding], {"scan_status": "COMPLETED", "coverage_complete": True, "errors": []})
     mock_scanner.scan_repository.return_value = mock_scanner.scan.return_value
 
     agent = ValidationAgent(test_runner=mock_runner, scanning_agent=mock_scanner)
@@ -589,7 +591,7 @@ def test_w_successful_validation(temp_repo: Path, sample_finding: VulnerabilityF
     )
 
     mock_scanner = MagicMock()
-    mock_scanner.scan.return_value = ([], {"scan_status": "COMPLETED", "errors": []})
+    mock_scanner.scan.return_value = ([], {"scan_status": "COMPLETED", "coverage_complete": True, "errors": []})
     mock_scanner.scan_repository.return_value = mock_scanner.scan.return_value
 
     agent = ValidationAgent(test_runner=mock_runner, scanning_agent=mock_scanner)
@@ -629,7 +631,7 @@ def test_x_original_repository_immutability(temp_repo: Path, sample_finding: Vul
     mock_runner.run_tests.return_value = TestResult(success=True, exit_code=0, command=["pytest"], duration=0.1)
 
     mock_scanner = MagicMock()
-    mock_scanner.scan.return_value = ([], {"scan_status": "COMPLETED", "errors": []})
+    mock_scanner.scan.return_value = ([], {"scan_status": "COMPLETED", "coverage_complete": True, "errors": []})
     mock_scanner.scan_repository.return_value = mock_scanner.scan.return_value
 
     agent = ValidationAgent(test_runner=mock_runner, scanning_agent=mock_scanner)

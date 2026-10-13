@@ -86,6 +86,7 @@ class ValidationResult(BaseModel):
         description="Consolidated step-by-step validation execution log"
     )
     sandbox_type: str = Field(default="local_workspace", description="Sandbox executor type utilized")
+    scanner_metadata: dict[str, Any] = Field(default_factory=dict, description="Coverage, rules provenance and scanner diagnostics")
     duration: float = Field(default=0.0, description="Total validation duration in seconds")
     started_at: datetime = Field(default_factory=get_utc_now, description="Validation start timestamp")
     completed_at: Optional[datetime] = Field(default=None, description="Validation completion timestamp")

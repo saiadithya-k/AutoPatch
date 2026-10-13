@@ -27,6 +27,7 @@ def init_db() -> None:
     """Initialize database tables and apply backward-compatible column migrations if needed."""
     from backend.database import models  # noqa: F401
     Base.metadata.create_all(bind=engine)
+    apply_mvp_migrations(engine)
 
     # Lightweight backward-compatible column migration for SQLite
     if settings.DATABASE_URL.startswith("sqlite"):
@@ -89,6 +90,32 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+def apply_mvp_migrations(target_engine) -> None:
+    """Idempotent additive SQLite migration; failures stop startup visibly."""
+    if target_engine.dialect.name != "sqlite":
+        return
+    from sqlalchemy import inspect, text
+    additions = {
+        "workflows": {
+            "processed_findings": "INTEGER NOT NULL DEFAULT 0",
+            "total_findings": "INTEGER NOT NULL DEFAULT 0",
+            "reviewable_count": "INTEGER NOT NULL DEFAULT 0",
+            "failed_count": "INTEGER NOT NULL DEFAULT 0",
+            "outcome": "VARCHAR", "errors_json": "TEXT", "request_json": "TEXT", "scan_metadata": "TEXT",
+        },
+        "validation_results": {"scanner_metadata": "TEXT"},
+    }
+    with target_engine.begin() as connection:
+        inspector = inspect(connection)
+        for table, columns in additions.items():
+            if not inspector.has_table(table):
+                continue
+            present = {column["name"] for column in inspector.get_columns(table)}
+            for name, definition in columns.items():
+                if name not in present:
+                    connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}"))
 
 
 @contextmanager

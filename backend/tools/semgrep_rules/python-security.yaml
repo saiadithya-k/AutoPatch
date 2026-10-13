@@ -1,0 +1,46 @@
+rules:
+  - id: autopatch.python.os-system
+    languages: [python]
+    severity: ERROR
+    message: Avoid shell execution through os.system; pass argument lists to subprocess.
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+      ruleset: autopatch-python-security-v1
+    pattern: os.system(...)
+  - id: autopatch.python.shell-injection
+    languages: [python]
+    severity: ERROR
+    message: Avoid subprocess execution with shell=True; pass an argument list.
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+      ruleset: autopatch-python-security-v1
+    pattern: subprocess.$FUNC(..., shell=True, ...)
+  - id: autopatch.python.dynamic-eval
+    languages: [python]
+    severity: ERROR
+    message: Dynamic eval can execute attacker-controlled Python code.
+    metadata:
+      cwe: "CWE-95: Eval Injection"
+      ruleset: autopatch-python-security-v1
+    pattern: eval(...)
+  - id: autopatch.python.sql-string-interpolation
+    languages: [python]
+    severity: ERROR
+    message: Use parameterized SQL instead of interpolating SQL strings.
+    metadata:
+      cwe: "CWE-89: SQL Injection"
+      ruleset: autopatch-python-security-v1
+    pattern-either:
+      - pattern: $CURSOR.execute(f"...")
+      - pattern: $CURSOR.execute("..." % ...)
+      - pattern: $CURSOR.execute("...".format(...))
+  - id: autopatch.python.unsafe-pickle
+    languages: [python]
+    severity: ERROR
+    message: Pickle deserialization can execute untrusted code.
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      ruleset: autopatch-python-security-v1
+    pattern-either:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)

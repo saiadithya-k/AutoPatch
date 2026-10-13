@@ -279,8 +279,13 @@ class PatchApplier:
                 expected_orig: list[str] = []
                 replacement_lines: list[str] = []
 
+                previous_prefix = None
                 for hline in hunk["lines"]:
                     if hline.startswith("\\ No newline"):
+                        if previous_prefix in (" ", "-") and expected_orig:
+                            expected_orig[-1] = expected_orig[-1].rstrip("\r\n")
+                        if previous_prefix in (" ", "+") and replacement_lines:
+                            replacement_lines[-1] = replacement_lines[-1].rstrip("\r\n")
                         continue
                     # Ensure trailing newline is preserved
                     norm_line = hline if hline.endswith("\n") else hline + "\n"
@@ -291,6 +296,7 @@ class PatchApplier:
                         expected_orig.append(norm_line[1:])
                     elif norm_line.startswith("+"):
                         replacement_lines.append(norm_line[1:])
+                    previous_prefix = norm_line[0]
 
                 target_start = orig_start - 1 + line_offset
                 hunk_matched = False

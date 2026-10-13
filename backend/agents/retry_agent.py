@@ -54,7 +54,7 @@ from backend.models.vulnerability import (
     VulnerabilityStatus,
 )
 from backend.agents.patch_generation_agent import PatchGenerationAgent
-from backend.agents.validation_agent import ValidationAgent
+from backend.agents.validation_agent import PatchLifecycleConflict, ValidationAgent
 from backend.services.audit import AuditService
 from backend.services.repository_context import RepositoryContextService
 
@@ -91,6 +91,7 @@ class RetryAgent:
         self,
         validation_result: ValidationResult,
         current_retries_used: int,
+        max_retries: Optional[int] = None,
     ) -> RetryDecision:
         """
         Deterministic policy to decide if a validation failure is retryable.
@@ -115,7 +116,8 @@ class RetryAgent:
         :param current_retries_used: Number of retry attempts made so far (0 for initial).
         :return: RetryDecision model.
         """
-        can_retry_further = current_retries_used < self.max_retries
+        effective_limit = self.max_retries if max_retries is None else max_retries
+        can_retry_further = current_retries_used < effective_limit
         failure_msg = validation_result.failure_reason or "Validation criteria not satisfied."
 
         # 1. Prefer structured machine-readable category from ValidationResult
@@ -192,7 +194,7 @@ class RetryAgent:
             reason = f"Validation failure: {failure_msg}"
 
         if not can_retry_further:
-            reason = f"Retry budget exhausted ({current_retries_used}/{self.max_retries}). Last failure: {reason}"
+            reason = f"Retry budget exhausted ({current_retries_used}/{effective_limit}). Last failure: {reason}"
 
         return RetryDecision(
             should_retry=should_retry,
@@ -279,6 +281,8 @@ Instruction: Analyze the failure evidence above. Generate an improved patch that
         :return: RetryLoopResult model.
         """
         allowed_retries = max_retries if max_retries is not None else self.max_retries
+        if not isinstance(allowed_retries, int) or isinstance(allowed_retries, bool) or not 0 <= allowed_retries <= 10:
+            raise ValueError("max_retries must be an integer between 0 and 10.")
         attempts_history: list[RetryAttemptRecord] = []
 
         logger.info(
@@ -334,6 +338,20 @@ Instruction: Analyze the failure evidence above. Generate an improved patch that
             workflow_id = patch_record.workflow_id
             current_attempt_num = patch_record.attempt_number
             patch_content = patch_record.patch_content or ""
+            if patch_record.status in {PatchStatus.APPROVED.value, PatchStatus.REJECTED.value}:
+                raise PatchLifecycleConflict("Reviewed candidates cannot enter the retry loop.")
+            if patch_record.status in {PatchStatus.FAILED.value, PatchStatus.REJECTED.value} or not patch_content.strip():
+                error_msg = "Candidate generation failed or was rejected; validation was not attempted."
+                attempts_history.append(RetryAttemptRecord(
+                    attempt_number=current_attempt_num, patch_id=current_patch_id,
+                    parent_patch_id=patch_record.parent_patch_id, status=RetryStatus.FAILED.value,
+                    failure_reason=error_msg, failure_category=FailureCategory.UNKNOWN_FAILURE.value,
+                    created_at=patch_record.created_at,
+                ))
+                return RetryLoopResult(status=RetryStatus.FAILED.value, vulnerability_id=vulnerability_id,
+                    workflow_id=workflow_id, initial_patch_id=initial_patch_id, total_attempts=len(attempts_history),
+                    attempts=attempts_history, last_validation_id=last_val_id, final_failure_reason=error_msg,
+                    recommendation="Inspect generation diagnostics before requesting another candidate.")
             patch_hash = hashlib.sha256(patch_content.strip().encode("utf-8")).hexdigest()
 
             # Check for identical repeated patch (No Progress protection)
@@ -350,16 +368,19 @@ Instruction: Analyze the failure evidence above. Generate an improved patch that
                 )
 
                 def _persist_no_prog(session):
-                    p_rec = session.query(PatchAttemptModel).filter(
+                    query = session.query(PatchAttemptModel).filter(
                         PatchAttemptModel.id == current_patch_id
-                    ).first()
-                    if p_rec:
-                        p_rec.status = RetryStatus.NO_PROGRESS.value
-                        p_rec.failure_category = FailureCategory.REPEATED_PATCH.value
-                        p_rec.retry_decision = repeat_decision.model_dump_json()
-                        p_rec.retry_reason = repeat_decision.reason
-                        if last_val_id:
-                            p_rec.validation_id = last_val_id
+                    )
+                    updates = {PatchAttemptModel.status: RetryStatus.NO_PROGRESS.value,
+                        PatchAttemptModel.failure_category: FailureCategory.REPEATED_PATCH.value,
+                        PatchAttemptModel.retry_decision: repeat_decision.model_dump_json(),
+                        PatchAttemptModel.retry_reason: repeat_decision.reason}
+                    if last_val_id:
+                        updates[PatchAttemptModel.validation_id] = last_val_id
+                    changed = query.filter(PatchAttemptModel.status.notin_(["APPROVED", "REJECTED"])).update(
+                        updates, synchronize_session="fetch")
+                    if not changed and query.first() is not None:
+                        raise PatchLifecycleConflict("Review was recorded; retry cannot alter the candidate.")
 
                 if db_session is not None:
                     _persist_no_prog(db_session)
@@ -437,12 +458,14 @@ Instruction: Analyze the failure evidence above. Generate an improved patch that
 
                 # Update validation_id and status on PatchAttemptModel
                 def _persist_passed(session):
-                    p_rec = session.query(PatchAttemptModel).filter(
+                    query = session.query(PatchAttemptModel).filter(
                         PatchAttemptModel.id == current_patch_id
-                    ).first()
-                    if p_rec:
-                        p_rec.validation_id = val_result.id
-                        p_rec.status = PatchStatus.VALIDATED.value
+                    )
+                    changed = query.filter(PatchAttemptModel.status.notin_(["APPROVED", "REJECTED"])).update(
+                        {PatchAttemptModel.validation_id: val_result.id,
+                         PatchAttemptModel.status: PatchStatus.READY_FOR_REVIEW.value}, synchronize_session="fetch")
+                    if not changed and query.first() is not None:
+                        raise PatchLifecycleConflict("Review was recorded; retry cannot replace reviewed evidence.")
 
                 if db_session is not None:
                     _persist_passed(db_session)
@@ -482,19 +505,22 @@ Instruction: Analyze the failure evidence above. Generate an improved patch that
             decision = self.evaluate_retryability(
                 validation_result=val_result,
                 current_retries_used=retries_used,
+                max_retries=allowed_retries,
             )
 
             # Persist retry decision, failure category, validation reference, and retry reason
             def _persist_failure(session):
-                p_rec = session.query(PatchAttemptModel).filter(
+                query = session.query(PatchAttemptModel).filter(
                     PatchAttemptModel.id == current_patch_id
-                ).first()
-                if p_rec:
-                    p_rec.retry_decision = decision.model_dump_json()
-                    p_rec.failure_category = decision.failure_category.value
-                    p_rec.retry_reason = decision.reason
-                    p_rec.validation_id = val_result.id
-                    p_rec.retryable = decision.should_retry
+                )
+                changed = query.filter(PatchAttemptModel.status.notin_(["APPROVED", "REJECTED"])).update(
+                    {PatchAttemptModel.retry_decision: decision.model_dump_json(),
+                     PatchAttemptModel.failure_category: decision.failure_category.value,
+                     PatchAttemptModel.retry_reason: decision.reason,
+                     PatchAttemptModel.validation_id: val_result.id,
+                     PatchAttemptModel.retryable: decision.should_retry}, synchronize_session="fetch")
+                if not changed and query.first() is not None:
+                    raise PatchLifecycleConflict("Review was recorded; retry cannot replace reviewed evidence.")
 
             if db_session is not None:
                 _persist_failure(db_session)

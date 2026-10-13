@@ -8,6 +8,9 @@ env/
 venv/
 ENV/
 .venv/
+.venv-runtime/
+.test-artifacts/
+.test-tmp/
 build/
 develop-eggs/
 dist/

@@ -110,6 +110,51 @@ def execute_system_diagnostic(target_host: str) -> int:
 # 1. Valid Patch Generation & Immutability
 # ==============================================================================
 
+def test_structured_changes_replace_malformed_model_diff(
+    sample_finding, sample_risk_assessment, sample_repository_context,
+):
+    payload = LLMPatchGeneration(
+        explanation="Preserve output without invoking a shell",
+        changes=[LLMCodeChange(
+            file_path="app.py", start_line=6, end_line=6,
+            original_code="    return os.system(command)",
+            replacement_code="    print(command)\n    return 0",
+        )],
+        unified_diff="--- a/app.py\n+++ b/app.py\n@@ -6,1 +6,1 @@\n-    return os.system(command)\n+    print(command)\n+    return 0\n",
+    )
+    agent = PatchGenerationAgent(llm_service=LLMService(provider=MockLLMProvider(canned_parsed=payload)))
+    result = agent.generate_patch(sample_finding, sample_risk_assessment,
+                                  sample_repository_context, persist=False)
+    assert result.status == PatchStatus.GENERATED
+    assert "@@ -3,4 +3,5 @@" in result.unified_diff
+    from backend.tools.patch_applier import PatchApplier
+    repository = Path(sample_repository_context.repository_root)
+    applied, error = PatchApplier.apply_patch(repository, result.unified_diff, strict_counts=True)
+    assert applied, error
+    assert "    print(command)\n    return 0\n" in (repository / "app.py").read_text()
+
+
+@pytest.mark.parametrize("start_line,expected_status", [(6, PatchStatus.GENERATED), (2, PatchStatus.REJECTED)])
+def test_dedented_model_block_requires_verified_coordinates(
+    sample_finding, sample_risk_assessment, sample_repository_context, start_line, expected_status,
+):
+    payload = LLMPatchGeneration(
+        explanation="Print without shell execution",
+        changes=[LLMCodeChange(file_path="app.py", start_line=start_line, end_line=start_line,
+                               original_code="return os.system(command)",
+                               replacement_code="print(command)\nreturn 0")],
+    )
+    source = Path(sample_repository_context.repository_root) / "app.py"
+    before = source.read_bytes()
+    agent = PatchGenerationAgent(llm_service=LLMService(provider=MockLLMProvider(canned_parsed=payload)))
+    result = agent.generate_patch(sample_finding, sample_risk_assessment,
+                                  sample_repository_context, persist=False)
+    assert result.status == expected_status
+    if expected_status == PatchStatus.GENERATED:
+        assert "+    print(command)\n+    return 0\n" in result.unified_diff
+        assert any("normalized_change_indentation" in warning for warning in result.warnings)
+    assert source.read_bytes() == before
+
 def test_successful_patch_generation(
     mock_llm_service: LLMService,
     sample_finding: VulnerabilityFinding,

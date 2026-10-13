@@ -106,7 +106,7 @@ def test_successful_validation(temp_repo, sample_finding):
 
     mock_scanner = MagicMock()
     # Re-scan finds zero vulnerabilities
-    mock_scanner.scan.return_value = ([], {"scan_status": "COMPLETED", "errors": []})
+    mock_scanner.scan.return_value = ([], {"scan_status": "COMPLETED", "coverage_complete": True, "errors": []})
     mock_scanner.scan_repository.return_value = mock_scanner.scan.return_value
 
     agent = ValidationAgent(
@@ -203,7 +203,7 @@ def test_test_suite_failure(temp_repo, sample_finding):
     )
 
     mock_scanner = MagicMock()
-    mock_scanner.scan.return_value = ([], {"scan_status": "COMPLETED", "errors": []})
+    mock_scanner.scan.return_value = ([], {"scan_status": "COMPLETED", "coverage_complete": True, "errors": []})
     mock_scanner.scan_repository.return_value = mock_scanner.scan.return_value
 
     agent = ValidationAgent(test_runner=mock_runner, scanning_agent=mock_scanner)
@@ -250,7 +250,7 @@ def test_scanner_failure_handling(temp_repo, sample_finding):
         persist=False,
     )
 
-    assert result.status == ValidationStatus.FAILED
+    assert result.status == ValidationStatus.ERROR
     assert result.original_vulnerability_resolved is False
     assert result.security_scan_passed is False
     assert "Security re-scan failed" in (result.failure_reason or "")
@@ -271,7 +271,7 @@ def test_unresolved_original_vulnerability(temp_repo, sample_finding):
 
     mock_scanner = MagicMock()
     # Re-scan reports same finding still present
-    mock_scanner.scan.return_value = ([sample_finding], {"scan_status": "COMPLETED", "errors": []})
+    mock_scanner.scan.return_value = ([sample_finding], {"scan_status": "COMPLETED", "coverage_complete": True, "errors": []})
     mock_scanner.scan_repository.return_value = mock_scanner.scan.return_value
 
     agent = ValidationAgent(test_runner=mock_runner, scanning_agent=mock_scanner)
@@ -318,7 +318,7 @@ def test_new_vulnerability_introduced(temp_repo, sample_finding):
 
     mock_scanner = MagicMock()
     # Original finding is gone, but new finding is present
-    mock_scanner.scan.return_value = ([new_finding], {"scan_status": "COMPLETED", "errors": []})
+    mock_scanner.scan.return_value = ([new_finding], {"scan_status": "COMPLETED", "coverage_complete": True, "errors": []})
     mock_scanner.scan_repository.return_value = mock_scanner.scan.return_value
 
     agent = ValidationAgent(test_runner=mock_runner, scanning_agent=mock_scanner)
@@ -358,7 +358,7 @@ def test_test_runner_timeout(temp_repo, sample_finding):
     )
 
     mock_scanner = MagicMock()
-    mock_scanner.scan.return_value = ([], {"scan_status": "COMPLETED", "errors": []})
+    mock_scanner.scan.return_value = ([], {"scan_status": "COMPLETED", "coverage_complete": True, "errors": []})
     mock_scanner.scan_repository.return_value = mock_scanner.scan.return_value
 
     agent = ValidationAgent(test_runner=mock_runner, scanning_agent=mock_scanner)
@@ -464,7 +464,7 @@ def test_database_persistence_and_patch_status_update(sqlite_session, temp_repo,
     mock_runner.run_tests.return_value = TestResult(success=True, exit_code=0, command=["pytest"], duration=0.1, tests_passed=1)
 
     mock_scanner = MagicMock()
-    mock_scanner.scan.return_value = ([], {"scan_status": "COMPLETED", "errors": []})
+    mock_scanner.scan.return_value = ([], {"scan_status": "COMPLETED", "coverage_complete": True, "errors": []})
     mock_scanner.scan_repository.return_value = mock_scanner.scan.return_value
 
     agent = ValidationAgent(test_runner=mock_runner, scanning_agent=mock_scanner)
@@ -478,7 +478,7 @@ def test_database_persistence_and_patch_status_update(sqlite_session, temp_repo,
 
     # Verify PatchAttemptModel was updated to VALIDATED
     refreshed_patch = sqlite_session.query(PatchAttemptModel).filter(PatchAttemptModel.id == "patch-full").first()
-    assert refreshed_patch.status == PatchStatus.VALIDATED.value
+    assert refreshed_patch.status == PatchStatus.READY_FOR_REVIEW.value
 
     # Verify VulnerabilityModel was transitioned to VALIDATED
     refreshed_vuln = sqlite_session.query(VulnerabilityModel).filter(VulnerabilityModel.id == sample_finding.id).first()

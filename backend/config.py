@@ -20,6 +20,15 @@ class Settings(BaseSettings):
     APP_NAME: str = Field(default="AutoPatch", description="Application name")
     ENVIRONMENT: str = Field(default="development", description="Runtime environment")
     LOG_LEVEL: str = Field(default="INFO", description="Logging level")
+    CORS_ORIGINS: list[str] = Field(
+        default=["http://localhost:5173", "http://127.0.0.1:5173"],
+        description="Allowed dashboard origins (JSON list in environment)",
+    )
+    ALLOWED_REPOSITORY_ROOT: Optional[str] = Field(
+        default=None, description="Optional repository root restriction for local API access"
+    )
+    WORKFLOW_WORKERS: int = Field(default=2, ge=1, le=8, description="Concurrent local workflows")
+    WORKFLOW_QUEUE_LIMIT: int = Field(default=8, ge=1, le=100, description="Maximum queued and running workflows")
 
     # Database
     DATABASE_URL: str = Field(
@@ -30,7 +39,7 @@ class Settings(BaseSettings):
     # Tool Execution & Timeouts
     SCAN_TIMEOUT: int = Field(default=120, description="Scanner timeout in seconds")
     TEST_TIMEOUT: int = Field(default=60, description="Test runner timeout in seconds")
-    MAX_PATCH_RETRIES: int = Field(default=3, description="Maximum patch retry attempts")
+    MAX_PATCH_RETRIES: int = Field(default=3, ge=0, le=10, description="Maximum additional patch retry attempts")
     DOCKER_ENABLED: bool = Field(default=False, description="Whether Docker isolation is enabled")
     DOCKER_IMAGE: str = Field(default="autopatch-validator:latest", description="Docker image tag for validation sandbox")
     DOCKER_MEMORY_LIMIT: str = Field(default="512m", description="Container memory limit (e.g. 512m)")
@@ -53,6 +62,7 @@ class Settings(BaseSettings):
 
     # LLM Settings
     LLM_PROVIDER: str = Field(default="openai", description="LLM provider name")
+    LLM_TIMEOUT: float = Field(default=120.0, gt=0, le=600, description="Model response timeout in seconds, including local model startup")
     LLM_MODEL: str = Field(default="gpt-4o", description="LLM model identifier")
     LLM_BASE_URL: Optional[str] = Field(default=None, description="Custom LLM API base URL (e.g. http://localhost:11434/v1 for Ollama)")
     OPENAI_API_KEY: Optional[str] = Field(default=None, description="OpenAI API key")

@@ -11,6 +11,9 @@ class AuditEventType(str, Enum):
 
     # Workflow level
     WORKFLOW_CREATED = "WORKFLOW_CREATED"
+    WORKFLOW_STAGE = "WORKFLOW_STAGE"
+    WORKFLOW_FINISHED = "WORKFLOW_FINISHED"
+    WORKFLOW_INTERRUPTED = "WORKFLOW_INTERRUPTED"
 
     # Static Scanning
     SCAN_STARTED = "SCAN_STARTED"
@@ -46,6 +49,8 @@ class AuditEventType(str, Enum):
 
     # Human Review Boundary (Hard boundary — no auto-merge or auto-approval)
     READY_FOR_REVIEW = "READY_FOR_REVIEW"
+    PATCH_APPROVED = "PATCH_APPROVED"
+    PATCH_REJECTED = "PATCH_REJECTED"
 
     # System
     SYSTEM_ERROR = "SYSTEM_ERROR"

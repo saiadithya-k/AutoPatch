@@ -13,9 +13,12 @@ from backend.api.routes.retry import router as retry_router
 from backend.api.routes.risk import router as risk_router
 from backend.api.routes.scan import router as scan_router
 from backend.api.routes.validation import router as validation_router
+from backend.api.routes.workflows import router as workflows_router
+from backend.services.workflows import workflow_jobs
 from backend.config import get_settings
 from backend.database.database import init_db
 from backend.models.vulnerability import HealthResponse
+from backend import __version__
 
 # Configure Logging
 settings = get_settings()
@@ -31,14 +34,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan manager to initialize resources."""
     logger.info("Initializing AutoPatch database schema...")
     init_db()
+    workflow_jobs.start()
+    workflow_jobs.recover()
     logger.info("AutoPatch initialization complete.")
     yield
     logger.info("AutoPatch shutting down.")
+    workflow_jobs.shutdown()
 
 
 app = FastAPI(
     title=settings.APP_NAME,
-    version="0.8.0",
+    version=__version__,
     description="AutoPatch Agentic AI Automated Vulnerability Remediation Platform - Persistent Audit & Lineage",
     lifespan=lifespan
 )
@@ -46,8 +52,8 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -60,6 +66,7 @@ app.include_router(patch_router)
 app.include_router(validation_router)
 app.include_router(retry_router)
 app.include_router(audit_router)
+app.include_router(workflows_router)
 
 
 @app.get(
@@ -73,7 +80,7 @@ def health_check() -> HealthResponse:
     return HealthResponse(
         status="ok",
         service="autopatch",
-        version="0.1.0"
+        version=__version__
     )
 
 

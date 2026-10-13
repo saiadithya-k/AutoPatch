@@ -56,6 +56,10 @@ from backend.tools.workspace import TemporaryWorkspace
 logger = logging.getLogger(__name__)
 
 
+class PatchLifecycleConflict(ValueError):
+    """A review decision prevents further candidate mutation."""
+
+
 class ValidationAgent:
     """Specialized Agent responsible for verifying candidate security patches in isolated sandboxes."""
 
@@ -86,8 +90,8 @@ class ValidationAgent:
         self.sandbox = sandbox or get_default_sandbox_executor()
         self.test_runner = test_runner or TestRunner(timeout=self.test_timeout, sandbox=self.sandbox)
         self.patch_applier = patch_applier or PatchApplier()
-        self.bandit_runner = bandit_runner or BanditRunner()
-        self.semgrep_runner = semgrep_runner or SemgrepRunner()
+        self.bandit_runner = bandit_runner or BanditRunner(sandbox=self.sandbox)
+        self.semgrep_runner = semgrep_runner or SemgrepRunner(sandbox=self.sandbox)
         self.scanning_agent = scanning_agent or ScanningAgent(
             bandit_runner=self.bandit_runner,
             semgrep_runner=self.semgrep_runner,
@@ -122,7 +126,7 @@ class ValidationAgent:
         for p in sorted(path.rglob("*")):
             if p.is_file() and not p.is_symlink():
                 # Exclude temporary/cache directories
-                if any(part.startswith(".") or part in ("__pycache__", "venv", ".venv", "node_modules") for part in p.parts):
+                if any(part in (".git", ".hg", ".svn", ".pytest_cache", "__pycache__", "venv", ".venv", ".venv-runtime", ".test-artifacts", ".test-tmp", "node_modules") for part in p.relative_to(path).parts):
                     continue
                 try:
                     rel = str(p.relative_to(path)).replace("\\", "/")
@@ -143,11 +147,11 @@ class ValidationAgent:
         Matches findings using stable identity attributes (tool, rule_id, CWE, type, file_path)
         rather than volatile line numbers.
         """
-        def _is_match(f: VulnerabilityFinding, target: VulnerabilityFinding) -> bool:
+        def _identity_match(f: VulnerabilityFinding, target: VulnerabilityFinding) -> bool:
             # File path match (relative or suffix)
             f1 = f.file_path.replace("\\", "/").strip()
             f2 = target.file_path.replace("\\", "/").strip()
-            file_matches = (f1 == f2 or f1.endswith(f2) or f2.endswith(f1))
+            file_matches = (f1 == f2)
 
             if not file_matches:
                 return False
@@ -176,6 +180,27 @@ class ValidationAgent:
                     return abs(target.line_start - f.line_start) <= 15
                 return True
 
+            return False
+
+        def _is_match(f: VulnerabilityFinding, target: VulnerabilityFinding) -> bool:
+            def identities(finding):
+                raw = finding.raw_finding if isinstance(finding.raw_finding, dict) else {}
+                provenance = raw.get("_autopatch_provenance")
+                if isinstance(provenance, list) and provenance:
+                    return [finding.model_copy(update=item) for item in provenance if isinstance(item, dict)]
+                # Legacy merged records retain only the first rule identity. Conservatively
+                # match shared tool and CWE when one scanner's old identity is unavailable.
+                return [finding]
+            for left in identities(f):
+                for right in identities(target):
+                    if _identity_match(left, right):
+                        return True
+                    left_tools = set(left.tool.split(", "))
+                    right_tools = set(right.tool.split(", "))
+                    if (len(left_tools) > 1 or len(right_tools) > 1) and left_tools & right_tools:
+                        if left.file_path == right.file_path and left.cwe and left.cwe == right.cwe:
+                            if left.line_start is None or right.line_start is None or abs(left.line_start-right.line_start) <= 15:
+                                return True
             return False
 
         # Check if original vulnerability remains
@@ -223,6 +248,10 @@ class ValidationAgent:
             patch_record = session.query(PatchAttemptModel).filter(PatchAttemptModel.id == patch_id).first()
             if not patch_record:
                 raise ValueError(f"Patch attempt '{patch_id}' not found.")
+            if patch_record.status in {PatchStatus.REJECTED.value, PatchStatus.APPROVED.value}:
+                raise PatchLifecycleConflict("Reviewed candidates cannot be validated again.")
+            if patch_record.status == PatchStatus.FAILED.value or not patch_record.patch_content:
+                raise ValueError("Patch is not eligible for validation; inspect its generation or review status.")
 
             vuln_record = session.query(VulnerabilityModel).filter(
                 VulnerabilityModel.id == patch_record.vulnerability_id
@@ -265,6 +294,7 @@ class ValidationAgent:
             line_end=vuln_record.line_end,
             code_snippet=vuln_record.code_snippet,
             description=vuln_record.description,
+            raw_finding=vuln_record.get_raw_finding(),
             status=VulnerabilityStatus(vuln_record.status) if vuln_record.status in VulnerabilityStatus.__members__ else VulnerabilityStatus.PRIORITIZED,
         )
 
@@ -283,6 +313,7 @@ class ValidationAgent:
                 line_end=vr.line_end,
                 code_snippet=vr.code_snippet,
                 description=vr.description,
+                raw_finding=vr.get_raw_finding(),
                 status=VulnerabilityStatus(vr.status) if vr.status in VulnerabilityStatus.__members__ else VulnerabilityStatus.PRIORITIZED,
             )
             for vr in all_vuln_records
@@ -364,12 +395,14 @@ class ValidationAgent:
         failure_reason = None
         test_result: Optional[TestResult] = None
         new_findings: list[dict[str, Any]] = []
+        scanner_metadata: dict[str, Any] = {}
 
         # Step 0: Calculate initial SHA-256 hashes of original repository (Immutability guarantee)
         initial_repo_hashes = self._calculate_repo_hashes(repository_path)
 
         # Step 1: Update Patch Attempt Status to VALIDATING
-        self._update_patch_status(patch_id, PatchStatus.VALIDATING.value, db_session=db_session)
+        if persist:
+            self._update_patch_status(patch_id, PatchStatus.VALIDATING.value, db_session=db_session)
 
         # Step 2: Spawn Isolated Temporary Workspace
         try:
@@ -476,12 +509,13 @@ class ValidationAgent:
                     persist=False,
                 )
                 scan_status = scan_meta.get("scan_status", "UNKNOWN")
+                scanner_metadata = scan_meta
                 validation_logs.append(
                     f"Security re-scan completed with status '{scan_status}', "
                     f"findings count: {len(rescan_findings)}."
                 )
 
-                if scan_status == "FAILED":
+                if scan_status != "COMPLETED" or scan_meta.get("coverage_complete") is not True:
                     failure_reason = failure_reason or f"Security re-scan failed: {'; '.join(scan_meta.get('errors', ['Scanners failed']))}"
                     validation_logs.append(f"ERROR: {failure_reason}")
 
@@ -497,7 +531,7 @@ class ValidationAgent:
                 sec_scan_passed = comparison.security_scan_passed
                 new_findings = comparison.new_findings
 
-                if scan_status == "FAILED":
+                if scan_status != "COMPLETED" or scan_meta.get("coverage_complete") is not True:
                     orig_resolved = False
                     sec_scan_passed = False
 
@@ -523,13 +557,22 @@ class ValidationAgent:
                     and not regression_detected
                 )
 
-                overall_status = ValidationStatus.PASSED if is_all_passed else ValidationStatus.FAILED
+                incomplete_scan = scan_status != "COMPLETED" or scan_meta.get("coverage_complete") is not True
+                overall_status = ValidationStatus.ERROR if incomplete_scan else (ValidationStatus.PASSED if is_all_passed else ValidationStatus.FAILED)
                 verdict_category: Optional[str] = None
                 if overall_status == ValidationStatus.PASSED:
                     validation_logs.append("VALIDATION SUCCESS: Patch met all correctness, testing, and security criteria.")
                 else:
                     validation_logs.append(f"VALIDATION FAILED: {failure_reason}")
-                    if not tests_passed:
+                    test_output = (test_result.stdout or "") + "\n" + (test_result.stderr or "") if test_result else ""
+                    missing_dependency = "ModuleNotFoundError" in test_output or "No module named" in test_output
+                    if missing_dependency:
+                        overall_status = ValidationStatus.ERROR
+                        failure_reason = "Validation environment is missing a project dependency; prepare a trusted validator image before retrying."
+                        verdict_category = FailureCategory.INFRASTRUCTURE_FAILURE.value
+                    elif incomplete_scan:
+                        verdict_category = FailureCategory.INFRASTRUCTURE_FAILURE.value
+                    elif not tests_passed:
                         verdict_category = FailureCategory.TEST_FAILURE.value
                     elif scan_status == "FAILED":
                         verdict_category = FailureCategory.INFRASTRUCTURE_FAILURE.value
@@ -561,6 +604,7 @@ class ValidationAgent:
                     started_at=start_utc,
                     test_result=test_result,
                     new_findings=new_findings,
+                    scanner_metadata=scanner_metadata,
                     repository_path=repository_path,
                     initial_hashes=initial_repo_hashes,
                     persist=persist,
@@ -620,9 +664,11 @@ class ValidationAgent:
     def _update_patch_status(self, patch_id: str, new_status: str, db_session: Optional[Any] = None) -> None:
         """Update patch attempt status in the database."""
         def _do(session):
-            patch_rec = session.query(PatchAttemptModel).filter(PatchAttemptModel.id == patch_id).first()
-            if patch_rec:
-                patch_rec.status = new_status
+            query = session.query(PatchAttemptModel).filter(PatchAttemptModel.id == patch_id)
+            changed = query.filter(PatchAttemptModel.status.notin_(["APPROVED", "REJECTED"])).update(
+                {PatchAttemptModel.status: new_status}, synchronize_session="fetch")
+            if not changed and query.first() is not None:
+                raise PatchLifecycleConflict("Review was recorded; candidate state is immutable.")
 
         if db_session is not None:
             _do(db_session)
@@ -653,6 +699,7 @@ class ValidationAgent:
         failure_category: Optional[str] = None,
         test_result: Optional[TestResult] = None,
         new_findings: Optional[list[dict[str, Any]]] = None,
+        scanner_metadata: Optional[dict[str, Any]] = None,
         persist: bool = True,
         db_session: Optional[Any] = None,
     ) -> ValidationResult:
@@ -725,18 +772,23 @@ class ValidationAgent:
             duration=round(duration, 3),
             started_at=started_at,
             completed_at=completed_at,
+            scanner_metadata=scanner_metadata or {},
         )
 
         # Status transitions
         patch_status = (
-            PatchStatus.VALIDATED.value
+            PatchStatus.READY_FOR_REVIEW.value
             if status == ValidationStatus.PASSED
             else PatchStatus.FAILED_VALIDATION.value
         )
-        self._update_patch_status(patch_id, patch_status, db_session=db_session)
-
         # Update vulnerability and workflow status if passed
         def _update_entities(session):
+            query = session.query(PatchAttemptModel).filter(PatchAttemptModel.id == patch_id)
+            changed = query.filter(PatchAttemptModel.status.notin_(["APPROVED", "REJECTED"])).update(
+                {PatchAttemptModel.status: patch_status, PatchAttemptModel.validation_id: result.id},
+                synchronize_session="fetch")
+            if not changed and query.first() is not None:
+                raise PatchLifecycleConflict("Review was recorded; validation cannot replace reviewed evidence.")
             if status == ValidationStatus.PASSED:
                 v = session.query(VulnerabilityModel).filter(VulnerabilityModel.id == vulnerability.id).first()
                 if v:
@@ -771,9 +823,12 @@ class ValidationAgent:
                     duration=result.duration,
                     started_at=result.started_at,
                     completed_at=result.completed_at,
+                    scanner_metadata=json.dumps(result.scanner_metadata),
                 )
                 session.add(model_rec)
 
+        if not persist:
+            return result
         if db_session is not None:
             _update_entities(db_session)
             db_session.commit()

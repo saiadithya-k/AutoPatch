@@ -15,7 +15,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from backend.config import get_settings
-from backend.tools.sandbox import LocalWorkspaceSandboxExecutor, SandboxExecutor
+from backend.tools.sandbox import SandboxExecutor, get_default_sandbox_executor
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ class TestRunner:
         :param sandbox: Optional SandboxExecutor to execute commands inside (Docker or local).
         """
         self.timeout = timeout or get_settings().TEST_TIMEOUT
-        self.sandbox = sandbox or LocalWorkspaceSandboxExecutor(default_timeout=self.timeout)
+        self.sandbox = sandbox or get_default_sandbox_executor()
 
     @classmethod
     def _parse_pytest_summary(cls, output: str) -> tuple[int, int, int]:
@@ -170,7 +170,7 @@ class TestRunner:
         tests_run = passed + failed
 
         # Success requires exit code 0, no timeout, no collection failure, and no failed tests
-        success = (exec_res.exit_code == 0 and not exec_res.timed_out and not coll_failed and failed == 0)
+        success = (exec_res.exit_code == 0 and not exec_res.timed_out and not coll_failed and failed == 0 and passed > 0)
 
         err_msg = None
         if not success:
@@ -183,7 +183,7 @@ class TestRunner:
             elif exec_res.exit_code != 0:
                 err_msg = f"Tests failed with exit code {exec_res.exit_code}."
             else:
-                err_msg = "Test execution failed."
+                err_msg = "No tests executed successfully; validation requires at least one passing test."
 
         return TestResult(
             success=success,

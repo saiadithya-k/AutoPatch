@@ -19,6 +19,7 @@ from backend.models.vulnerability import (
     WorkflowStatus,
 )
 from backend.services.repository import RepositoryValidationError
+from backend.services.workflows import validate_repository
 
 router = APIRouter(prefix="/api", tags=["Scanning"])
 
@@ -38,6 +39,7 @@ def run_scan(
     agent = ScanningAgent()
 
     try:
+        validate_repository(request.repository_path)
         findings, metadata = agent.scan(
             repository_path=request.repository_path,
             persist=True,
@@ -113,36 +115,3 @@ def get_vulnerabilities(
             )
         )
     return results
-
-
-@router.get(
-    "/workflows/{workflow_id}",
-    response_model=WorkflowResponse,
-    summary="Get workflow status",
-    description="Retrieve status and execution details for a specific workflow run."
-)
-def get_workflow(
-    workflow_id: str,
-    db: Session = Depends(get_db)
-) -> WorkflowResponse:
-    """Retrieve workflow record by ID."""
-    wf = db.query(WorkflowModel).filter(WorkflowModel.id == workflow_id).first()
-    if not wf:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Workflow '{workflow_id}' not found."
-        )
-
-    return WorkflowResponse(
-        id=wf.id,
-        repository_path=wf.repository_path,
-        repository_url=wf.repository_url,
-        branch=wf.branch,
-        status=WorkflowStatus(wf.status) if wf.status in WorkflowStatus.__members__ else WorkflowStatus.FAILED,
-        current_stage=wf.current_stage,
-        max_retries=wf.max_retries,
-        created_at=wf.created_at,
-        started_at=wf.started_at,
-        completed_at=wf.completed_at,
-        error_message=wf.error_message
-    )

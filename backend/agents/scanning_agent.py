@@ -7,6 +7,7 @@ finding normalization, cross-tool deduplication, and database persistence.
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -32,6 +33,7 @@ from backend.services.audit import AuditService
 from backend.services.repository import RepositoryService, RepositoryValidationError
 from backend.tools.bandit_runner import BanditResult, BanditRunner
 from backend.tools.semgrep_runner import SemgrepResult, SemgrepRunner
+from backend.tools.sandbox import get_default_sandbox_executor
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +48,9 @@ class ScanningAgent:
         repository_service: Optional[RepositoryService] = None,
         audit_service: Optional[AuditService] = None,
     ):
-        self.bandit_runner = bandit_runner or BanditRunner()
-        self.semgrep_runner = semgrep_runner or SemgrepRunner()
+        sandbox = get_default_sandbox_executor() if bandit_runner is None or semgrep_runner is None else None
+        self.bandit_runner = bandit_runner or BanditRunner(sandbox=sandbox)
+        self.semgrep_runner = semgrep_runner or SemgrepRunner(sandbox=sandbox)
         self.repository_service = repository_service or RepositoryService()
         self.audit_service = audit_service or AuditService()
 
@@ -56,7 +59,10 @@ class ScanningAgent:
         Normalize a file path to a relative POSIX-style path from repo_root.
         """
         try:
-            p = Path(file_path_str).resolve()
+            p = Path(file_path_str)
+            if not p.is_absolute():
+                p = repo_root / p
+            p = p.resolve()
             rel = p.relative_to(repo_root.resolve())
             return rel.as_posix()
         except Exception:
@@ -178,6 +184,9 @@ class ScanningAgent:
             cwe_id = str(cwe_raw[0])
         elif isinstance(cwe_raw, str):
             cwe_id = cwe_raw
+        if cwe_id:
+            match = re.search(r"CWE-\d+", cwe_id)
+            cwe_id = match.group(0) if match else cwe_id
 
         raw_conf = (metadata.get("confidence") or "MEDIUM").upper()
         conf_map = {
@@ -229,7 +238,14 @@ class ScanningAgent:
         """
         deduped: list[VulnerabilityFinding] = []
 
+        def identity(finding):
+            return {name: getattr(finding, name) for name in
+                    ("tool", "rule_id", "cwe", "type", "file_path", "line_start", "line_end")}
+
         for finding in findings:
+            raw = dict(finding.raw_finding or {})
+            raw.setdefault("_autopatch_provenance", [identity(finding)])
+            finding.raw_finding = raw
             matched = False
             for existing in deduped:
                 # Same file check
@@ -252,8 +268,9 @@ class ScanningAgent:
                         or finding.type.lower() in existing.type.lower()
                     )
 
-                    if same_id or same_cwe or same_type or (existing.tool != finding.tool):
+                    if same_id or (existing.tool != finding.tool and (same_cwe or same_type)):
                         # Merge provenance into existing finding
+                        existing.raw_finding["_autopatch_provenance"].extend(raw["_autopatch_provenance"])
                         if finding.tool not in existing.tool:
                             existing.tool = f"{existing.tool}, {finding.tool}"
                         # Prefer higher severity if difference exists
@@ -278,6 +295,7 @@ class ScanningAgent:
         workflow_id: Optional[str] = None,
         persist: bool = True,
         db_session: Optional[Any] = None,
+        manage_workflow: bool = True,
     ) -> tuple[list[VulnerabilityFinding], dict[str, Any]]:
         """
         Perform a comprehensive static vulnerability scan on a Python repository.
@@ -305,7 +323,7 @@ class ScanningAgent:
             validated_path = self.repository_service.validate_repository_path(str(repository_path))
         except RepositoryValidationError as e:
             logger.error("Repository validation failed: %s", e)
-            if persist:
+            if persist and manage_workflow:
                 self._record_failed_workflow(workflow_id, str(repository_path), str(e), db_session=db_session)
             raise
 
@@ -313,7 +331,8 @@ class ScanningAgent:
 
         # 2. Record initial workflow state in database
         if persist:
-            self._record_started_workflow(workflow_id, str(validated_path), db_session=db_session)
+            if manage_workflow:
+                self._record_started_workflow(workflow_id, str(validated_path), db_session=db_session)
             self.audit_service.record_event(
                 event_type=AuditEventType.SCAN_STARTED,
                 workflow_id=workflow_id,
@@ -341,6 +360,8 @@ class ScanningAgent:
                 "exit_code": bandit_result.exit_code,
                 "raw_findings_count": len(bandit_result.findings),
                 "error_message": bandit_result.error_message,
+                "errors": bandit_result.errors,
+                "ruleset": "bandit-default",
             }
             if bandit_result.success:
                 for raw in bandit_result.findings:
@@ -365,6 +386,8 @@ class ScanningAgent:
                 "exit_code": semgrep_result.exit_code,
                 "raw_findings_count": len(semgrep_result.findings),
                 "error_message": semgrep_result.error_message,
+                "errors": semgrep_result.errors,
+                "ruleset": getattr(self.semgrep_runner, "ruleset_provenance", None),
             }
             if semgrep_result.success:
                 for raw in semgrep_result.findings:
@@ -384,8 +407,10 @@ class ScanningAgent:
         normalized_findings = self._deduplicate_findings(all_findings)
 
         # 6. Determine overall scan status
-        bandit_ok = bool(bandit_result and bandit_result.success)
-        semgrep_ok = bool(semgrep_result and semgrep_result.success)
+        bandit_ok = bool(bandit_result and bandit_result.success and not bandit_result.errors)
+        semgrep_ok = bool(semgrep_result and semgrep_result.success and not semgrep_result.errors)
+        scanner_metadata["coverage_complete"] = bandit_ok and semgrep_ok
+        scanner_metadata["required_scanners"] = ["bandit", "semgrep"]
 
         if bandit_ok and semgrep_ok:
             scan_status = "COMPLETED"
@@ -414,7 +439,8 @@ class ScanningAgent:
                 status=workflow_status,
                 current_stage=current_stage,
                 error_message=err_msg,
-                db_session=db_session
+                db_session=db_session,
+                manage_workflow=manage_workflow,
             )
             if scan_status == "COMPLETED":
                 ev_type = AuditEventType.SCAN_COMPLETED
@@ -437,6 +463,7 @@ class ScanningAgent:
                     "duration": round(elapsed, 2),
                     "bandit_findings_count": len(bandit_result.findings) if bandit_result and bandit_result.findings else 0,
                     "semgrep_findings_count": len(semgrep_result.findings) if semgrep_result and semgrep_result.findings else 0,
+                    "scanner_metadata": scanner_metadata,
                 },
                 session=db_session,
             )
@@ -523,14 +550,15 @@ class ScanningAgent:
         status: WorkflowStatus = WorkflowStatus.COMPLETED,
         current_stage: str = "SCAN_COMPLETE",
         error_message: Optional[str] = None,
-        db_session: Optional[Any] = None
+        db_session: Optional[Any] = None,
+        manage_workflow: bool = True,
     ) -> None:
         """Persist normalized vulnerability findings and workflow execution state to the database."""
         now = utc_now()
 
         def _do(session):
             wf = session.query(WorkflowModel).filter(WorkflowModel.id == workflow_id).first()
-            if wf:
+            if wf and manage_workflow:
                 wf.status = status.value
                 wf.current_stage = current_stage
                 wf.completed_at = now

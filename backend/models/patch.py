@@ -22,6 +22,9 @@ class PatchStatus(str, Enum):
     FAILED_VALIDATION = "FAILED_VALIDATION"
     READY_FOR_REVIEW = "READY_FOR_REVIEW"
     APPROVED = "APPROVED"
+    NO_PROGRESS = "NO_PROGRESS"
+    RETRY_EXHAUSTED = "RETRY_EXHAUSTED"
+    VALIDATION_FAILED = "VALIDATION_FAILED"
 
 
 class PatchFileChange(BaseModel):
@@ -83,4 +86,8 @@ class PatchAttemptResponse(BaseModel):
     retry_reason: Optional[str] = None
     validation_id: Optional[str] = None
     retryable: bool = True
+    review: Optional[dict[str, Any]] = None
+    evidence_errors: list[dict[str, Any]] = Field(default_factory=list)
+    failure_category: Optional[str] = None
+    retry_decision: Optional[dict[str, Any]] = None
     created_at: datetime

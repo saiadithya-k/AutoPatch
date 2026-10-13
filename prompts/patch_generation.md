@@ -15,6 +15,7 @@ Your task is to generate a minimal, precise, syntax-valid, and functionally safe
    - Preserve public function/method signatures, parameter names, and return types.
    - If new standard library imports are needed (e.g. `import shlex`, `import ast`), include them safely at the top or within the scope.
 6. STRUCTURED JSON OUTPUT ONLY: Your entire response must be a single valid JSON object adhering strictly to the `LLMPatchGeneration` schema.
+7. EXACT REPLACEMENTS: Include every required modification in `changes`, including imports. Preserve the original block's indentation exactly. Set `unified_diff` to an empty string; AutoPatch computes the diff from the verified replacements. Do not calculate diff headers yourself.
 
 ## REQUIRED JSON SCHEMA
 ```json
@@ -29,7 +30,7 @@ Your task is to generate a minimal, precise, syntax-valid, and functionally safe
       "replacement_code": "new secure replacement code block"
     }
   ],
-  "unified_diff": "--- a/file.py\\n+++ b/file.py\\n@@ -10,3 +10,3 @@\\n-old\\n+new",
+  "unified_diff": "",
   "assumptions": [
     "List of any technical assumptions made regarding runtime or dependencies"
   ],

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env.local
+.npm-cache/
+.qa-clean/
+dashboard-qa*.png

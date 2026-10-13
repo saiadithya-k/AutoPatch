@@ -360,7 +360,7 @@ def test_api_retry_history_returns_actual_decision_and_category(client, populate
     assert att2["patch_id"] == "PATCH-HIST-SECOND-02"
     assert att2["attempt_number"] == 2
     assert att2["parent_patch_id"] == patch_id
-    assert att2["status"] in [RetryStatus.VALIDATED.value, ValidationStatus.PASSED.value]
+    assert att2["status"] == PatchStatus.READY_FOR_REVIEW.value
     assert att2["failure_category"] is None
     assert att2["retry_decision"] is None
 
@@ -489,7 +489,7 @@ def test_database_consistency_three_attempts_fail_fail_pass(client, populated_wo
     assert p_3.attempt_number == 3
     assert p_3.parent_patch_id == "PATCH-TRIPLE-02"
     assert p_3.validation_id == "VAL-TRIPLE-03"
-    assert p_3.status == PatchStatus.VALIDATED.value
+    assert p_3.status == PatchStatus.READY_FOR_REVIEW.value
 
     # Verify 3 validation results records in database
     val_records = db_session.query(ValidationResultModel).filter(

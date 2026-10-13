@@ -1,6 +1,7 @@
 """Semgrep SAST scanner runner with safe subprocess execution and structured parsing."""
 
 import json
+import hashlib
 import logging
 import os
 import shutil
@@ -11,6 +12,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from backend.config import get_settings
+from backend.tools.sandbox import SandboxExecutor
+
+LOCAL_RULES = Path(__file__).with_name("semgrep_rules") / "python-security.yaml"
+RULESET_VERSION = "autopatch-python-security-v1"
 
 logger = logging.getLogger(__name__)
 
@@ -30,21 +35,32 @@ class SemgrepResult:
 class SemgrepRunner:
     """Safe runner wrapper for Semgrep static analysis engine."""
 
-    def __init__(self, config: str = "p/security-audit", timeout: Optional[int] = None):
+    def __init__(self, config: Optional[str] = None, timeout: Optional[int] = None,
+                 sandbox: Optional[SandboxExecutor] = None):
         """
         Initialize Semgrep runner.
         :param config: Semgrep ruleset configuration (default 'p/security-audit' or 'p/python' / local rule path).
         :param timeout: Execution timeout in seconds.
         """
         settings = get_settings()
-        self.config = config
+        self.config = config or str(LOCAL_RULES)
         self.timeout = timeout or settings.SCAN_TIMEOUT
+        self.sandbox = sandbox
+        self.ruleset_provenance = {
+            "version": RULESET_VERSION if self.config == str(LOCAL_RULES) else "custom",
+            "sha256": hashlib.sha256(Path(self.config).read_bytes()).hexdigest() if Path(self.config).is_file() else None,
+        }
 
     def _resolve_executable(self) -> list[str]:
         """
         Locate Semgrep executable safely on current system.
         Returns command array prefix.
         """
+        # Python CLI avoids the native CLI's certificate-store startup failures on Windows.
+        if os.name == "nt":
+            pysemgrep = Path(sys.executable).with_name("pysemgrep.exe")
+            if pysemgrep.is_file():
+                return [str(pysemgrep)]
         # 1. System PATH
         which_semgrep = shutil.which("semgrep")
         if which_semgrep:
@@ -71,7 +87,7 @@ class SemgrepRunner:
             return [scripts_pysemgrep]
 
         # 4. Fallback to python module execution or direct command
-        return [sys.executable, "-m", "semgrep"]
+        return [sys.executable, "-m", "semgrep.console_scripts.pysemgrep"]
 
     def run(self, repo_path: str | Path, custom_config: Optional[str] = None) -> SemgrepResult:
         """
@@ -89,11 +105,21 @@ class SemgrepRunner:
                 error_message=f"Target path does not exist: {target_path}"
             )
 
-        cmd_base = self._resolve_executable()
+        docker = self.sandbox is not None and self.sandbox.sandbox_type == "docker"
+        cmd_base = ["pysemgrep"] if docker else self._resolve_executable()
         rule_config = custom_config or self.config
+        if docker:
+            if rule_config != str(LOCAL_RULES):
+                return SemgrepResult(success=False, exit_code=-1,
+                    error_message="Docker validation requires the bundled offline ruleset.")
+            rule_config = "/opt/autopatch/rules/python-security.yaml"
 
         # Build safe subprocess argument list (no shell=True)
-        cmd = cmd_base + ["--config", rule_config, "--no-git-ignore", "--json", "--quiet", str(target_path)]
+        cmd = cmd_base + ["--config", rule_config, "--no-git-ignore", "--project-root", ".", "--json", "--quiet",
+                          "--metrics=off", "--no-rewrite-rule-ids"]
+        for excluded in (".venv", ".venv-runtime", "venv", "node_modules", ".test-artifacts", ".test-tmp"):
+            cmd.extend(["--exclude", excluded])
+        cmd.append(".")
 
         logger.info("Executing Semgrep: %s", " ".join(cmd))
 
@@ -103,14 +129,22 @@ class SemgrepRunner:
         env["PYTHONUTF8"] = "1"
 
         try:
-            process = subprocess.run(
+            if self.sandbox is not None:
+                execution = self.sandbox.run_command(cmd, cwd=target_path, timeout=self.timeout)
+                if execution.timed_out:
+                    return SemgrepResult(success=False, exit_code=-1, stdout=execution.stdout,
+                                         stderr=execution.stderr, error_message="Semgrep scan timed out.")
+                process = subprocess.CompletedProcess(cmd, execution.exit_code, execution.stdout, execution.stderr)
+            else:
+                process = subprocess.run(
                 cmd,
+                cwd=str(target_path),
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
                 shell=False,
                 env=env
-            )
+                )
         except subprocess.TimeoutExpired as e:
             logger.error("Semgrep scan timed out after %s seconds", self.timeout)
             return SemgrepResult(
@@ -144,30 +178,23 @@ class SemgrepRunner:
         if stdout:
             try:
                 data = json.loads(stdout)
+                if not isinstance(data, dict) or not isinstance(data.get("results"), list) or not isinstance(data.get("errors", []), list):
+                    raise ValueError("Missing or malformed Semgrep result fields")
                 findings = data.get("results", [])
                 errors = data.get("errors", [])
 
                 return SemgrepResult(
-                    success=True,
+                    success=exit_code == 0 and not errors,
                     exit_code=exit_code,
                     findings=findings,
                     errors=errors,
                     stdout=stdout,
-                    stderr=stderr
+                    stderr=stderr,
+                    error_message="Semgrep coverage is incomplete or execution failed." if exit_code != 0 or errors else None,
                 )
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, ValueError, TypeError):
                 # If exit code was 0 but not JSON, report error
                 pass
-
-        if exit_code == 0:
-            return SemgrepResult(
-                success=True,
-                exit_code=0,
-                findings=[],
-                errors=[],
-                stdout=stdout,
-                stderr=stderr
-            )
 
         return SemgrepResult(
             success=False,

@@ -5,12 +5,21 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from backend.agents.validation_agent import ValidationAgent
+from backend.agents.validation_agent import PatchLifecycleConflict, ValidationAgent
 from backend.database.database import get_db
 from backend.database.models import PatchAttemptModel, ValidationResultModel
 from backend.models.validation import ValidationResult, ValidationStatus
 
 router = APIRouter(prefix="/api", tags=["Patch Validation"])
+
+
+def _scanner_metadata(record):
+    """Keep legacy malformed evidence inspectable without treating it as coverage."""
+    try:
+        metadata = json.loads(record.scanner_metadata) if record.scanner_metadata else {}
+        return metadata if isinstance(metadata, dict) else {}
+    except (ValueError, TypeError):
+        return {}
 
 
 @router.post(
@@ -35,6 +44,9 @@ def validate_patch_endpoint(
             detail=f"Patch attempt '{patch_id}' not found."
         )
 
+    if patch_rec.status in {"APPROVED", "REJECTED"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="Reviewed candidates cannot be validated again.")
     agent = ValidationAgent()
     try:
         result = agent.validate_patch(
@@ -43,6 +55,8 @@ def validate_patch_endpoint(
             db_session=db,
         )
         return result
+    except PatchLifecycleConflict as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -116,6 +130,8 @@ def get_patch_validation(
         new_findings=new_findings_data,
         regression_detected=val_rec.regression_detected or False,
         failure_reason=val_rec.failure_reason,
+        failure_category=val_rec.failure_category,
+        scanner_metadata=_scanner_metadata(val_rec),
         validation_logs=val_rec.validation_logs,
         sandbox_type=val_rec.sandbox_type or "local_workspace_dev_fallback",
         duration=duration,
@@ -182,6 +198,8 @@ def get_validation_by_id(
         new_findings=new_findings_data,
         regression_detected=val_rec.regression_detected or False,
         failure_reason=val_rec.failure_reason,
+        failure_category=val_rec.failure_category,
+        scanner_metadata=_scanner_metadata(val_rec),
         validation_logs=val_rec.validation_logs,
         sandbox_type=val_rec.sandbox_type or "local_workspace_dev_fallback",
         duration=duration,

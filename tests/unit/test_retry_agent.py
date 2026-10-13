@@ -1077,7 +1077,7 @@ def test_26_retry_decision_auditable_persistence(sqlite_session, workflow_setup)
         failure_reason="test_calc failed",
     )
 
-    retry_agent = RetryAgent(max_retries=0)  # Stop immediately on attempt 1 failure
+    retry_agent = RetryAgent(validation_agent=mock_val, max_retries=0)  # Stop immediately on attempt 1 failure
     result = retry_agent.run_retry_loop(initial_patch_id=patch_id, db_session=sqlite_session)
 
     assert result.status == RetryStatus.RETRY_EXHAUSTED.value
@@ -1093,4 +1093,29 @@ def test_26_retry_decision_auditable_persistence(sqlite_session, workflow_setup)
     assert stored_dec["failure_category"] == FailureCategory.TEST_FAILURE.value
     assert stored_dec["should_retry"] is False
     assert stored_dec["can_retry_further"] is False
+
+
+@pytest.mark.parametrize("patch_status", ["FAILED"])
+def test_failed_generation_is_never_validated(sqlite_session, workflow_setup, patch_status):
+    record = sqlite_session.get(PatchAttemptModel, workflow_setup["initial_patch_id"])
+    record.status = patch_status
+    sqlite_session.commit()
+    validator = MagicMock()
+    result = RetryAgent(validation_agent=validator).run_retry_loop(record.id, db_session=sqlite_session)
+    assert result.status == RetryStatus.FAILED.value
+    assert result.total_attempts == 1
+    validator.validate_patch.assert_not_called()
+
+
+def test_zero_retry_override_stops_generation(sqlite_session, workflow_setup):
+    patch_id = workflow_setup["initial_patch_id"]
+    validator = MagicMock()
+    validator.validate_patch.return_value = make_validation_result(patch_id, workflow_setup["vulnerability_id"],
+        status=ValidationStatus.FAILED, failure_category=FailureCategory.SYNTAX_ERROR.value)
+    generator = MagicMock()
+    result = RetryAgent(validation_agent=validator, patch_generation_agent=generator, max_retries=3).run_retry_loop(
+        patch_id, max_retries=0, db_session=sqlite_session)
+    assert result.status == RetryStatus.RETRY_EXHAUSTED.value
+    assert result.total_attempts == 1
+    generator.generate_patch_for_vulnerability_id.assert_not_called()
 

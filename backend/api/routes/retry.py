@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from backend.agents.retry_agent import RetryAgent
+from backend.agents.validation_agent import PatchLifecycleConflict
 from backend.database.database import get_db
 from backend.database.models import PatchAttemptModel, ValidationResultModel
 from backend.models.retry import RetryAttemptRecord, RetryDecision, RetryLoopResult
@@ -20,7 +21,7 @@ router = APIRouter(prefix="/api", tags=["Patch Retry Loop"])
 )
 def run_patch_retry_endpoint(
     patch_id: str,
-    max_retries: Optional[int] = Query(None, ge=1, le=10, description="Override maximum additional retries (default 3)"),
+    max_retries: Optional[int] = Query(None, ge=0, le=10, description="Override maximum additional retries (default 3)"),
     db: Session = Depends(get_db),
 ) -> RetryLoopResult:
     """Run bounded patch retry loop."""
@@ -34,6 +35,9 @@ def run_patch_retry_endpoint(
             detail=f"Patch attempt '{patch_id}' not found."
         )
 
+    if patch_rec.status in {"APPROVED", "REJECTED"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="Reviewed candidates cannot enter the retry loop.")
     agent = RetryAgent(max_retries=max_retries)
     try:
         result = agent.run_retry_loop(
@@ -42,6 +46,8 @@ def run_patch_retry_endpoint(
             db_session=db,
         )
         return result
+    except PatchLifecycleConflict as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

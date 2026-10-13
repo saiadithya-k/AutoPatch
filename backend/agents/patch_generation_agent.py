@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import re
+import textwrap
 from pathlib import Path
 from typing import Any, Optional
 
@@ -206,42 +207,51 @@ INSTRUCTION: Output MUST be a single valid JSON object adhering strictly to the 
         if not orig_lines and original_source:
             orig_lines = [original_source]
 
-        modified_lines = list(orig_lines)
-
+        edits: list[tuple[int, int, list[str]]] = []
         for change in changes:
-            # 1. Attempt exact original code matching in source lines
-            target_code = change.original_code.strip()
-            matched_start = None
-            matched_end = None
-
-            if target_code:
-                orig_stripped = [l.strip() for l in orig_lines]
-                target_lines = [l.strip() for l in target_code.splitlines() if l.strip()]
-                target_len = len(target_lines)
-
-                if target_len > 0:
-                    for idx in range(len(orig_stripped) - target_len + 1):
-                        if orig_stripped[idx : idx + target_len] == target_lines:
-                            matched_start = idx
-                            matched_end = idx + target_len
-                            break
-
-            if matched_start is not None and matched_end is not None:
-                start_idx = matched_start
-                end_idx = matched_end
+            if change.file_path.replace("\\", "/") != file_path.replace("\\", "/"):
+                return "", [f"invalid_change: Change belongs to another file: {change.file_path}"]
+            target_lines = change.original_code.splitlines()
+            source_lines = [line.rstrip("\r\n") for line in orig_lines]
+            if not target_lines:
+                return "", ["invalid_change: Original code must identify a nonempty source block."]
+            matches = [index for index in range(len(source_lines) - len(target_lines) + 1)
+                       if source_lines[index:index + len(target_lines)] == target_lines]
+            offset = context_window_start - 1
+            expected_start = change.start_line - 1 - offset
+            expected_end = change.end_line - offset
+            indentation_prefix = None
+            if not matches and 0 <= expected_start < expected_end <= len(source_lines) and expected_end - expected_start == len(target_lines):
+                source_block = source_lines[expected_start:expected_end]
+                # Some local models return a dedented block. Only restore indentation
+                # at the explicit coordinates when every other source character agrees.
+                if textwrap.dedent("\n".join(source_block)) == textwrap.dedent("\n".join(target_lines)):
+                    nonempty = [line for line in source_block if line.strip()]
+                    if nonempty:
+                        import os
+                        indentation_prefix = os.path.commonprefix([
+                            line[:len(line) - len(line.lstrip())] for line in nonempty])
+                        matches = [expected_start]
+                        warnings.append("normalized_change_indentation: Restored source indentation at verified coordinates.")
+            if expected_start in matches and expected_end - expected_start == len(target_lines):
+                start_idx, end_idx = expected_start, expected_end
+            elif len(matches) == 1:
+                start_idx = matches[0]
+                end_idx = start_idx + len(target_lines)
             else:
-                # Fall back to 1-indexed coordinates adjusted by window start
-                offset = max(0, context_window_start - 1)
-                start_idx = max(0, change.start_line - 1 - offset)
-                end_idx = min(len(modified_lines), change.end_line - offset)
-
-            # Replace lines in modified buffer
+                return "", ["invalid_change: Original block is absent or ambiguous; source coordinates do not match."]
+            if any(start_idx < end and end_idx > start for start, end, _ in edits):
+                return "", ["invalid_change: Overlapping replacements are not permitted."]
             replacement = change.replacement_code
+            if indentation_prefix is not None:
+                replacement = textwrap.indent(textwrap.dedent(replacement), indentation_prefix)
             repl_lines = replacement.splitlines(keepends=True) if replacement else []
             if replacement and not replacement.endswith("\n") and repl_lines:
                 repl_lines[-1] = repl_lines[-1] + "\n"
+            edits.append((start_idx, end_idx, repl_lines))
 
-            # Apply replacement in copy
+        modified_lines = list(orig_lines)
+        for start_idx, end_idx, repl_lines in sorted(edits, reverse=True):
             modified_lines[start_idx:end_idx] = repl_lines
 
         # Produce unified diff
@@ -255,7 +265,8 @@ INSTRUCTION: Output MUST be a single valid JSON object adhering strictly to the 
             )
         )
 
-        diff_str = "".join(diff_lines).strip()
+        diff_str = "".join(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+                           for line in diff_lines)
         return diff_str, warnings
 
     def _parse_diff_file_headers(self, unified_diff: str) -> list[tuple[str, str]]:
@@ -307,6 +318,17 @@ INSTRUCTION: Output MUST be a single valid JSON object adhering strictly to the 
         if not unified_diff or not unified_diff.strip():
             warnings.append("empty_diff: Model produced no code modifications.")
             return False, warnings
+
+        # Removing a scanner warning with a directive is not a remediation.
+        import re
+        from collections import Counter
+        suppression = re.compile(r"#\s*(?:nosec|nosemgrep|nosem)\b", re.IGNORECASE)
+        removed = Counter(line[1:].strip() for line in unified_diff.splitlines()
+                          if line.startswith("-") and not line.startswith("---") and suppression.search(line))
+        added = Counter(line[1:].strip() for line in unified_diff.splitlines()
+                        if line.startswith("+") and not line.startswith("+++") and suppression.search(line))
+        if added - removed:
+            return False, ["scanner_suppression_rejected: Candidate adds or changes scanner suppression directives."]
 
         # 1. Independently parse unified diff file headers
         diff_file_pairs = self._parse_diff_file_headers(unified_diff)
@@ -585,27 +607,44 @@ INSTRUCTION: Output MUST be a single valid JSON object adhering strictly to the 
 
         # 6. Compute Unified Diff
         unified_diff = llm_output.unified_diff or ""
-        if not unified_diff and llm_output.changes:
-            source_content = repository_context.surrounding_code
-            window_start = repository_context.context_window_start or 1
-            if repository_context.repository_root and repository_context.vulnerable_file:
-                target_p = Path(repository_context.repository_root) / repository_context.vulnerable_file
-                if target_p.exists() and target_p.is_file():
-                    try:
+        provided_safe = True
+        if unified_diff and llm_output.changes:
+            provided_safe, provided_warnings = self._validate_patch_safety(
+                context=repository_context, llm_patch=llm_output, unified_diff=unified_diff)
+            warnings.extend(provided_warnings)
+        # Structured replacements are authoritative; model-written hunk counts often drift.
+        if llm_output.changes:
+            grouped: dict[str, list[LLMCodeChange]] = {}
+            for change in llm_output.changes:
+                grouped.setdefault(change.file_path.replace("\\", "/"), []).append(change)
+            diffs: list[str] = []
+            for file_path, file_changes in sorted(grouped.items()):
+                source_content = repository_context.surrounding_code
+                window_start = repository_context.context_window_start or 1
+                try:
+                    if repository_context.repository_root:
+                        root = Path(repository_context.repository_root).resolve()
+                        target_p = (root / file_path).resolve()
+                        target_p.relative_to(root)
+                        if target_p.is_symlink() or not target_p.is_file():
+                            raise ValueError("Target source is missing or a symbolic link")
                         source_content = target_p.read_text(encoding="utf-8")
                         window_start = 1
-                    except Exception as e:
-                        logger.warning("Could not read full source file for diff: %s", e)
-
-            # Synthesize diff from code change blocks
-            computed_diff, diff_warns = self._generate_unified_diff(
-                file_path=repository_context.vulnerable_file,
-                original_source=source_content,
-                changes=llm_output.changes,
-                context_window_start=window_start,
-            )
-            unified_diff = computed_diff
-            warnings.extend(diff_warns)
+                    elif file_path != repository_context.vulnerable_file:
+                        raise ValueError("Full source unavailable for related file")
+                    computed_diff, diff_warns = self._generate_unified_diff(
+                        file_path=file_path, original_source=source_content,
+                        changes=file_changes, context_window_start=window_start)
+                    warnings.extend(diff_warns)
+                    if not computed_diff:
+                        diffs = []
+                        break
+                    diffs.append(computed_diff)
+                except (OSError, ValueError) as error:
+                    warnings.append(f"invalid_change: Cannot synthesize {file_path}: {error}")
+                    diffs = []
+                    break
+            unified_diff = "".join(diffs)
 
         # 7. Validate Patch Safety & Constraints
         is_safe, safety_warnings = self._validate_patch_safety(
@@ -615,6 +654,7 @@ INSTRUCTION: Output MUST be a single valid JSON object adhering strictly to the 
         )
         warnings.extend(safety_warnings)
 
+        is_safe = is_safe and provided_safe
         patch_status = PatchStatus.GENERATED if is_safe else PatchStatus.REJECTED
 
         # Convert changes to PatchFileChange models
@@ -629,7 +669,7 @@ INSTRUCTION: Output MUST be a single valid JSON object adhering strictly to the 
             for c in llm_output.changes
         ]
 
-        changed_files = list({c.file_path for c in llm_output.changes}) or [repository_context.vulnerable_file]
+        changed_files = sorted({to_file for _, to_file in self._parse_diff_file_headers(unified_diff)})
 
         orig_code = llm_output.changes[0].original_code if llm_output.changes else None
         prop_code = llm_output.changes[0].replacement_code if llm_output.changes else None

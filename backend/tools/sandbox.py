@@ -359,4 +359,8 @@ def get_default_sandbox_executor() -> SandboxExecutor:
             pids_limit=settings.DOCKER_PIDS_LIMIT,
             fail_closed=True,
         )
+    if not settings.ALLOW_LOCAL_FALLBACK:
+        raise DockerRequiredError(
+            "Local execution is disabled by ALLOW_LOCAL_FALLBACK=False; enable Docker isolation."
+        )
     return LocalWorkspaceSandboxExecutor(default_timeout=settings.TEST_TIMEOUT)

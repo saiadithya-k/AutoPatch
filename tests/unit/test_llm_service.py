@@ -32,6 +32,14 @@ class SimpleTestSchema(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+def test_provider_uses_configured_timeout_and_explicit_override(monkeypatch):
+    from backend.config import Settings
+    monkeypatch.setattr("backend.services.llm.openai_provider.get_settings",
+                        lambda: Settings(LLM_TIMEOUT=180))
+    assert OpenAIProvider(api_key="local-test")._timeout == 180
+    assert OpenAIProvider(api_key="local-test", timeout=12)._timeout == 12
+
+
 # ==============================================================================
 # 1. Base Provider & Mock Provider Tests
 # ==============================================================================

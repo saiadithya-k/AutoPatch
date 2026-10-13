@@ -47,7 +47,7 @@ class OpenAIProvider(LLMProvider):
         self._api_key = api_key or settings.OPENAI_API_KEY
         self._model = model or settings.LLM_MODEL or "gpt-4o"
         self._base_url = base_url.rstrip("/")
-        self._timeout = timeout or 30.0
+        self._timeout = timeout if timeout is not None else settings.LLM_TIMEOUT
 
     @property
     def name(self) -> str:

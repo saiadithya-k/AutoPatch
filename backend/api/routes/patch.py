@@ -19,6 +19,7 @@ from backend.models.patch import (
     PatchGenerationResult,
     PatchStatus,
 )
+from backend.services.reports import patch_data
 
 router = APIRouter(prefix="/api", tags=["Patch Generation"])
 
@@ -109,22 +110,7 @@ def get_vulnerability_patches(
         PatchAttemptModel.vulnerability_id == vulnerability_id
     ).order_by(PatchAttemptModel.attempt_number.asc()).all()
 
-    return [
-        PatchAttemptResponse(
-            id=r.id,
-            workflow_id=r.workflow_id,
-            vulnerability_id=r.vulnerability_id,
-            attempt_number=r.attempt_number,
-            patch_format=r.patch_format,
-            patch_content=r.patch_content,
-            explanation=r.explanation,
-            files_changed=r.get_files_changed(),
-            generation_model=r.generation_model,
-            status=PatchStatus(r.status) if r.status in PatchStatus.__members__ else PatchStatus.GENERATED,
-            created_at=r.created_at,
-        )
-        for r in records
-    ]
+    return [PatchAttemptResponse(**patch_data(db, r)) for r in records]
 
 
 @router.get(
@@ -148,16 +134,4 @@ def get_patch_by_id(
             detail=f"Patch attempt '{patch_id}' not found."
         )
 
-    return PatchAttemptResponse(
-        id=record.id,
-        workflow_id=record.workflow_id,
-        vulnerability_id=record.vulnerability_id,
-        attempt_number=record.attempt_number,
-        patch_format=record.patch_format,
-        patch_content=record.patch_content,
-        explanation=record.explanation,
-        files_changed=record.get_files_changed(),
-        generation_model=record.generation_model,
-        status=PatchStatus(record.status) if record.status in PatchStatus.__members__ else PatchStatus.GENERATED,
-        created_at=record.created_at,
-    )
+    return PatchAttemptResponse(**patch_data(db, record))

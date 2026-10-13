@@ -5,6 +5,9 @@ import tempfile
 from pathlib import Path
 from typing import Generator
 import pytest
+
+# Client lifespan initializes the production engine. Keep tests off the local database.
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -68,3 +71,19 @@ def temp_clean_repo() -> Generator[Path, None, None]:
             "    return a + b\n"
         )
         yield tmp_path
+
+
+def pytest_collection_modifyitems(items):
+    """Identify existing real-tool tests without silently skipping missing prerequisites."""
+    scanner_files = {
+        "test_scan_integration.py", "test_api_scan.py", "test_api_patch.py",
+        "test_risk_assessment_integration.py", "test_repository_context_integration.py",
+        "test_patch_generation_integration.py", "test_validation_integration.py",
+    }
+    scanner_functions = {
+        "test_bandit_runner_successful_execution", "test_semgrep_runner_successful_execution",
+        "test_semgrep_runner_custom_config",
+    }
+    for item in items:
+        if Path(str(item.path)).name in scanner_files or item.originalname in scanner_functions:
+            item.add_marker(pytest.mark.scanners)

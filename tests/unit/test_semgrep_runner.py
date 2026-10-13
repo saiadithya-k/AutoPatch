@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
 
-from backend.tools.semgrep_runner import SemgrepResult, SemgrepRunner
+from backend.tools.semgrep_runner import LOCAL_RULES, SemgrepResult, SemgrepRunner
 
 
 def test_semgrep_runner_nonexistent_path():
@@ -17,7 +17,7 @@ def test_semgrep_runner_nonexistent_path():
 
 
 def test_semgrep_runner_successful_execution(vulnerable_repo_path: Path):
-    runner = SemgrepRunner(config="p/security-audit")
+    runner = SemgrepRunner()
     result = runner.run(vulnerable_repo_path)
     assert result.success is True
     assert result.exit_code == 0
@@ -40,7 +40,7 @@ def test_semgrep_runner_timeout_handling(tmp_path: Path):
 
 def test_semgrep_runner_custom_config(vulnerable_repo_path: Path):
     runner = SemgrepRunner()
-    result = runner.run(vulnerable_repo_path, custom_config="p/security-audit")
+    result = runner.run(vulnerable_repo_path, custom_config=str(LOCAL_RULES))
     assert result.success is True
 
 

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from backend.config import get_settings
+from backend.tools.sandbox import SandboxExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +32,10 @@ class BanditResult:
 class BanditRunner:
     """Safe runner wrapper for Bandit static analysis tool."""
 
-    def __init__(self, timeout: Optional[int] = None):
+    def __init__(self, timeout: Optional[int] = None, sandbox: Optional[SandboxExecutor] = None):
         settings = get_settings()
         self.timeout = timeout or settings.SCAN_TIMEOUT
+        self.sandbox = sandbox
 
     def _resolve_executable(self) -> list[str]:
         """
@@ -74,20 +76,30 @@ class BanditRunner:
                 error_message=f"Target path does not exist: {target_path}"
             )
 
-        cmd_base = self._resolve_executable()
+        docker = self.sandbox is not None and self.sandbox.sandbox_type == "docker"
+        cmd_base = ["python", "-m", "bandit"] if docker else self._resolve_executable()
         # Safe argument list - no shell=True, arguments properly separated
-        cmd = cmd_base + ["-r", str(target_path), "-f", "json", "-q"]
+        cmd = cmd_base + ["-r", ".", "-f", "json", "-q",
+                          "--exclude", ".venv,.venv-runtime,venv,node_modules,.test-artifacts,.test-tmp"]
 
         logger.info("Executing Bandit: %s", " ".join(cmd))
 
         try:
-            process = subprocess.run(
+            if self.sandbox is not None:
+                execution = self.sandbox.run_command(cmd, cwd=target_path, timeout=self.timeout)
+                if execution.timed_out:
+                    return BanditResult(success=False, exit_code=-1, stdout=execution.stdout,
+                                        stderr=execution.stderr, error_message="Bandit scan timed out.")
+                process = subprocess.CompletedProcess(cmd, execution.exit_code, execution.stdout, execution.stderr)
+            else:
+                process = subprocess.run(
                 cmd,
+                cwd=str(target_path),
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
                 shell=False
-            )
+                )
         except subprocess.TimeoutExpired as e:
             logger.error("Bandit scan timed out after %s seconds", self.timeout)
             return BanditResult(
@@ -119,21 +131,24 @@ class BanditRunner:
         # Bandit returns 0 when no issues found, 1 when issues found. Both are successful scans!
         if exit_code in (0, 1):
             try:
-                data = json.loads(stdout) if stdout else {}
+                data = json.loads(stdout)
+                if not isinstance(data, dict) or not isinstance(data.get("results"), list) or not isinstance(data.get("errors", []), list):
+                    raise ValueError("Missing or malformed Bandit result fields")
                 findings = data.get("results", [])
                 errors = data.get("errors", [])
                 metrics = data.get("metrics", {})
 
                 return BanditResult(
-                    success=True,
+                    success=not errors,
                     exit_code=exit_code,
                     findings=findings,
                     errors=errors,
                     metrics=metrics,
                     stdout=stdout,
-                    stderr=stderr
+                    stderr=stderr,
+                    error_message="Bandit could not inspect all files." if errors else None,
                 )
-            except json.JSONDecodeError as e:
+            except (json.JSONDecodeError, ValueError, TypeError) as e:
                 logger.error("Failed to parse Bandit JSON output: %s", e)
                 return BanditResult(
                     success=False,

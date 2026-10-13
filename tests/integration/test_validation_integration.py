@@ -112,26 +112,25 @@ def test_full_pipeline_validation_real_demo_patch(
     )
     assert context.surrounding_code is not None
 
-    # 4. Patch Generation with MockLLM targeting safe subprocess replacement
+    # 4. Preserve the diagnostic's output and success code without shell execution.
     # In app.py: replace `command = f"echo Running diagnostic for host {target_host}"\n    return os.system(command)`
     safe_replacement = (
-        f'    import sys\n'
-        f'    res = subprocess.run([sys.executable, "-c", "import sys; sys.exit(0)"], capture_output=True, check=False)  # nosec B603\n'
-        f'    return res.returncode'
+        '    print(f"Running diagnostic for host {target_host}")\n'
+        '    return 0'
     )
     mock_llm_payload = LLMPatchGeneration(
-        explanation="Replace os.system shell invocation with safe subprocess argument list.",
+        explanation="Print the diagnostic directly and preserve its success return code.",
         changes=[
             LLMCodeChange(
                 file_path="app.py",
                 start_line=14,
                 end_line=15,
-                original_code='command = f"echo Running diagnostic for host {target_host}"\n    return os.system(command)',
+                original_code='    command = f"echo Running diagnostic for host {target_host}"\n    return os.system(command)',
                 replacement_code=safe_replacement,
             )
         ],
         unified_diff="",  # Unified diff will be synthesized cleanly by PatchGenerationAgent
-        assumptions=["subprocess is available in standard library"],
+        assumptions=["The diagnostic only prints a message and returns success"],
         tests_to_run=["test_app.py"],
     )
 
@@ -182,7 +181,7 @@ def test_full_pipeline_validation_real_demo_patch(
     # 7. Verify Database Persistence and Lifecycle Transitions
     db_patch = db_session.query(PatchAttemptModel).filter(PatchAttemptModel.id == patch_result.id).first()
     assert db_patch is not None
-    assert db_patch.status == PatchStatus.VALIDATED.value
+    assert db_patch.status == PatchStatus.READY_FOR_REVIEW.value
 
     db_vuln = db_session.query(VulnerabilityModel).filter(VulnerabilityModel.id == target_vuln.id).first()
     assert db_vuln is not None
