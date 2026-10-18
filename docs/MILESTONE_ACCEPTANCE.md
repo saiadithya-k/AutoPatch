@@ -14,7 +14,7 @@ behavioral tests and security re-scans.
 | Real Docker acceptance | 11 passed |
 | Browser workflow/review regression suite | 5 passed in installed Chrome; no uncaught page errors |
 | Frontend production build | Passed |
-| GitHub-hosted workflow execution | Pending first push or manual dispatch; not run remotely in this task |
+| GitHub-hosted workflow execution | Branch published; first run passed both Python jobs and browser/build, Docker permission correction under verification |
 | Previously successful literal-parser fixture, live Ollama | Rechecked successfully; both candidates ready for review |
 | Combined real Ollama + Docker matrix | All four cases passed; all original source files unchanged |
 
@@ -25,6 +25,13 @@ All four reference remediation cases pass compilation, project tests and both
 scanners inside Docker. Additional cases reject syntax errors, broken behavior,
 unresolved findings and missing project dependencies. Source hashes remain
 unchanged. The missing-image check uses `--pull never` and does not fetch images.
+
+Native Linux uses a supplementary host group, group access on disposable copies,
+and a group-writable image umask so UID 10001 can read/write the workspace and
+the host can clean up generated artifacts. The private workspace grants no
+world access. Source permissions and local-development copies are unchanged;
+symlink targets are never chmodded. A separate Linux container check exercises
+nested artifact creation and complete host cleanup.
 
 Browser tests start the real API on port 8765 and dashboard on 5174, with a new
 SQLite database under `.test-artifacts` for each run. Scripted model responses

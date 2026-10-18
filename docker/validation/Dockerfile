@@ -29,6 +29,12 @@ ENV SEMGREP_SEND_METRICS=off
 # pip populated this cache as root; the runtime UID must be able to compile in /tmp.
 RUN mkdir -p /tmp/autopatch-pycache && chown -R 10001:10001 /tmp/autopatch-pycache
 
+# Keep generated workspace artifacts writable by the host's shared group, so
+# native Linux can clean up files created by UID 10001. No world-write access.
+RUN printf '#!/bin/sh\numask 0002\nexec "$@"\n' > /usr/local/bin/autopatch-entrypoint && \
+    chmod 755 /usr/local/bin/autopatch-entrypoint
+ENTRYPOINT ["/usr/local/bin/autopatch-entrypoint"]
+
 # Set workspace directory inside container
 WORKDIR /workspace
 

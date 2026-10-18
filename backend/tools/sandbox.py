@@ -8,6 +8,7 @@ resource limits, and automatic container cleanup.
 
 from abc import ABC, abstractmethod
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -206,6 +207,11 @@ class DockerSandboxExecutor(SandboxExecutor):
             "--pids-limit", str(self.pids_limit),
             self.image,
         ] + cmd
+
+        if os.name == "posix":
+            # The validator remains UID/GID 10001. A supplementary host GID
+            # grants access to the private disposable workspace on native Linux.
+            docker_cmd[3:3] = ["--group-add", str(os.getgid())]
 
         self.validate_command_security(docker_cmd, cwd)
         return docker_cmd

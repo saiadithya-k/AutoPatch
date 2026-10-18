@@ -406,7 +406,7 @@ class ValidationAgent:
 
         # Step 2: Spawn Isolated Temporary Workspace
         try:
-            with TemporaryWorkspace(repository_path) as workspace:
+            with TemporaryWorkspace(repository_path, container_access=self.sandbox.sandbox_type == "docker") as workspace:
                 validation_logs.append(f"Spawned isolated temporary workspace at '{workspace}'.")
 
                 # Step 3: Apply Candidate Patch to Workspace Atomically

@@ -1,5 +1,6 @@
 """Actual containers: isolation, offline scanners, tests and immutable source."""
 import json
+import os
 
 import pytest
 
@@ -34,6 +35,26 @@ def test_container_has_no_network_or_privileges(docker_validator, tmp_path):
     assert int(evidence["caps"], 16) == 0
     assert evidence["no_new_privs"] == "1"
     assert not evidence["docker_socket"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Native Linux bind-mount ownership")
+def test_nonroot_container_can_write_and_host_can_remove_workspace(docker_validator, tmp_path):
+    import stat
+    from backend.tools.workspace import TemporaryWorkspace
+    repository = tmp_path / "private-source"
+    repository.mkdir(mode=0o700)
+    source = repository / "app.py"
+    source.write_text("value = 1\n")
+    source.chmod(0o600)
+    with TemporaryWorkspace(repository, container_access=True) as workspace:
+        result = docker_validator.run_command(["python", "-c",
+            "from pathlib import Path; assert Path('app.py').read_text() == 'value = 1\\n'; "
+            "Path('generated/deep').mkdir(parents=True); Path('generated/deep/result').write_text('ok')"], cwd=workspace)
+        assert result.exit_code == 0, result.stderr
+        assert (workspace / "generated/deep/result").read_text() == "ok"
+    assert not workspace.exists(), "Container-created files prevented workspace cleanup"
+    assert source.read_text() == "value = 1\n"
+    assert stat.S_IMODE(source.stat().st_mode) == 0o600
 
 
 @pytest.mark.parametrize("name", CASES)
