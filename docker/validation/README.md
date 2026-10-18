@@ -30,6 +30,25 @@ as infrastructure failures rather than retryable patch regressions. Building
 the image is a trusted preparation step with network access; candidate validation
 remains offline.
 
+Compilation uses `/tmp/autopatch-pycache`, owned by UID 10001. Scanners disable
+version checks as well as metrics, and validator runs use `--pull never` so a
+missing image fails instead of starting an implicit registry download.
+
+The repository's `.dockerignore` includes only validator build assets. Build
+custom derived images in a separate trusted build directory containing their
+Dockerfile and reviewed requirements file.
+
+For the checked-in dependency acceptance fixture:
+
+```powershell
+docker build -f docker/validation/acceptance.Dockerfile -t autopatch-validator-acceptance:latest .
+.\.venv\Scripts\python.exe -m pytest -q -m docker --run-docker
+```
+
+This layer explicitly declares HTTPX 0.28.1. It does not read requirements from
+submitted repositories. Actual Docker acceptance passed 11 checks on 2026-10-18;
+see [the verification report](../../docs/MILESTONE_ACCEPTANCE.md).
+
 Local execution requires `ALLOW_LOCAL_FALLBACK=true` and is intended for trusted
 development repositories. Temporary copies protect source files from patch
 application; local execution does not sandbox the project's test code.

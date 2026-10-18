@@ -1,0 +1,10 @@
+**
+!docker/
+!docker/validation/
+!docker/validation/Dockerfile
+!docker/validation/acceptance.Dockerfile
+!docker/validation/acceptance-requirements.txt
+!backend/
+!backend/tools/
+!backend/tools/semgrep_rules/
+!backend/tools/semgrep_rules/**

@@ -1,0 +1,123 @@
+name: AutoPatch checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: '1'
+  PYTHONIOENCODING: utf-8
+  DOCKER_ENABLED: 'false'
+  ALLOW_LOCAL_FALLBACK: 'true'
+  LLM_PROVIDER: openai
+  DATABASE_URL: 'sqlite:///:memory:'
+  SEMGREP_SEND_METRICS: 'off'
+
+jobs:
+  backend:
+    name: Python 3.11 / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            python: ./.venv/bin/python
+          - os: windows-2025
+            python: ./.venv/Scripts/python.exe
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m venv .venv
+      - run: ${{ matrix.python }} -m pip install -r requirements.txt
+      - run: ${{ matrix.python }} -m pip check
+      - name: Prepare test artifacts
+        run: python -c "from pathlib import Path; Path('.test-artifacts').mkdir(exist_ok=True)"
+      - name: Unit, API and real-scanner regressions
+        run: ${{ matrix.python }} -m pytest -q -m "not docker and not live_model" --basetemp .test-artifacts/ci-pytest --junitxml .test-artifacts/backend.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-${{ matrix.os }}
+          path: .test-artifacts/backend.xml
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+  browser:
+    name: Dashboard build and browser review
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: pip
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: python -m pip install -r requirements.txt
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Real API, reference model and browser review
+        run: npm run test:e2e
+        working-directory: frontend
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          if-no-files-found: ignore
+
+  docker:
+    name: Real offline Docker validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Build trusted validator images
+        run: |
+          docker build -f docker/validation/Dockerfile -t autopatch-validator:latest .
+          docker build -f docker/validation/acceptance.Dockerfile -t autopatch-validator-acceptance:latest .
+      - name: Prepare test artifacts
+        run: python -c "from pathlib import Path; Path('.test-artifacts').mkdir(exist_ok=True)"
+      - name: Require actual containers and complete scanner evidence
+        run: python -m pytest -q -m docker --run-docker --basetemp .test-artifacts/ci-docker --junitxml .test-artifacts/docker.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: docker-report
+          path: .test-artifacts/docker.xml
+          include-hidden-files: true
+          if-no-files-found: ignore

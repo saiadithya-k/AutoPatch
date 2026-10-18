@@ -45,7 +45,7 @@ class LLMCodeChange(BaseModel):
     file_path: str = Field(description="Target relative file path to modify")
     start_line: int = Field(description="1-indexed line number where replacement begins")
     end_line: int = Field(description="1-indexed line number where replacement ends")
-    original_code: str = Field(description="Exact original code snippet being replaced")
+    original_code: str = Field(min_length=1, description="Exact nonempty original code snippet being replaced, including indentation")
     replacement_code: str = Field(description="New secure replacement code snippet")
 
 

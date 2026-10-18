@@ -13,9 +13,19 @@ This plan supplements IMPLEMENTATION_PLAN.md with execution priorities based on 
 - Python 3.11.9 launches the API; Bandit and Semgrep execute successfully. Browser checks verified real vulnerable and clean scans, visible model failures, polling, refresh persistence, and disabled review for failed or superseded candidates. Separate controlled-model runs verified approval and rejection of real validated proposals, persisted reports, retry history, scanner provenance, and required rejection comments. Desktop and mobile layouts were checked. Frontend production build passes.
 - Complete Python 3.11.9 suite after live Ollama integration fixes: **297 tests passed** (65.69 seconds), with two dependency deprecation warnings. Dependency consistency and Git whitespace checks pass. Real-tool end-to-end coverage verifies first-attempt test failure, successful retry, persistent idempotent approval, conflicting-decision rejection, audit/report evidence, and unchanged source.
 - Ollama is now reachable. A real `qwen2.5-coder:7b` workflow produced two reviewable candidates on the literal-parser fixture; both passed compilation, two project tests, and complete Bandit/Semgrep re-scans. Cold-start timeout, malformed model diff headers, and dedented source blocks were corrected with regression coverage. See [live verification evidence](OLLAMA_VERIFICATION.md).
-- Docker is unavailable here, so a real container run remains unverified. The controlled demo does not require a model service.
+- Docker was unavailable during the initial verification. Actual Docker acceptance was completed on 2026-10-18; see the milestone below. The controlled demo does not require a model service.
 
-The initial baseline and phase acceptance criteria below are retained for traceability. The real Docker gate is not claimed complete; live Ollama was verified on the documented fixture.
+The initial baseline and phase acceptance criteria below are retained for traceability. Initial live Ollama verification covered the documented literal-parser fixture.
+
+## Next milestone verification (2026-10-18)
+
+- Real Docker verification: **11 checks passed**, including offline/non-root execution, all four reference remediation cases, missing images/dependencies, bad candidates, and timeout cleanup.
+- Browser automation: **5 checks passed**, covering real workflow/review APIs, refresh persistence, superseded attempts, incomplete coverage, and mobile layout.
+- Python 3.11 deterministic/API/scanner suite: **322 passed**; Docker and live-model gates are explicit separate runs.
+- Added GitHub Actions jobs for Windows/Ubuntu Python 3.11, frontend build and browser tests, and real Linux Docker acceptance. Remote execution awaits the first push or manual dispatch.
+- Added four reproducible live-model acceptance cases. Source-bound local-model edits resolved the three initially failing cases: the complete matrix now passes **4 of 4** with real Ollama, both locally and with offline Docker validation. The server supplies exact original source and destinations; model responses select block IDs and replacements. Tests remain read-only, unknown IDs and stale originals fail closed, and retries use original source.
+- All original repositories remained unchanged. Incomplete fixes, invalid replacements, repeated candidates and timeouts remain explicit failures; no validation or review gates were weakened.
+- See [the milestone report](MILESTONE_ACCEPTANCE.md) for commands, evidence, fixes, and limitations.
 
 ## Initial assessment
 

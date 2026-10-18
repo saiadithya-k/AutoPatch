@@ -220,7 +220,7 @@ class ValidationAgent:
             original_vulnerability_resolved=orig_resolved,
             remaining_original_findings_count=len(remaining_matches),
             new_findings_count=len(new_findings),
-            new_findings=[f.model_dump() for f in new_findings],
+            new_findings=[f.model_dump(mode="json") for f in new_findings],
             security_scan_passed=security_scan_passed,
         )
 

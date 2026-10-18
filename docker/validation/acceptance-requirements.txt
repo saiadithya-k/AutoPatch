@@ -1,0 +1,2 @@
+# Reviewed dependency for the acceptance fixture; never read from submitted projects.
+httpx==0.28.1

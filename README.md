@@ -21,7 +21,7 @@ An existing Python 3.11 environment can be reused. The setup helper preserves ex
 
 Readiness checks report the interpreter, scanners, execution mode, Docker, and configured model availability without printing secrets. A missing model service causes readiness to fail; scans still work, and generation failures remain visible in workflow history. The supplied configuration uses a local Ollama service at `http://localhost:11434/v1` with `qwen2.5-coder:7b`. Ensure that service and model are available before requesting live generation. The mock provider is for controlled tests and is not a general repository remediator.
 
-Model requests use `LLM_TIMEOUT=120` seconds by default to allow local model startup; configure it in `.env` when needed (maximum 600 seconds). AutoPatch computes diffs from verified structured replacements. Dedented model blocks are reindented only when their explicit coordinates and all non-indentation source text match. See [live Ollama verification](docs/OLLAMA_VERIFICATION.md) for the tested workflow and evidence.
+Model requests use `LLM_TIMEOUT=120` seconds and `LLM_MAX_OUTPUT_TOKENS=4096` by default. AutoPatch computes diffs from verified structured replacements. Ollama selects source block IDs and returns replacement code; the server supplies exact originals, paths and line numbers. Other providers retain the original structured-edit format. The original [live Ollama verification](docs/OLLAMA_VERIFICATION.md) covers a literal-parser fixture; the [broader acceptance report](docs/MILESTONE_ACCEPTANCE.md) records four passing live-model cases locally and with Docker, plus browser and regression checks.
 
 Start the API in one terminal:
 
@@ -76,5 +76,7 @@ npm run build
 ```
 
 Tests use isolated databases and controlled model responses. Scanner tests require the pinned scanner dependencies. Docker and live model verification are separate environment checks; they are not implied by passing the deterministic suite.
+
+GitHub Actions now runs Python 3.11 checks on Ubuntu/Windows, the frontend build and browser review suite, and actual offline Docker acceptance. Live model tests require explicit opt-in. See [milestone commands and results](docs/MILESTONE_ACCEPTANCE.md) for Docker image preparation, browser tests, and reproducible live-model evaluation.
 
 See [workflow API contracts](docs/MVP_API.md) and [implementation plan and verification status](docs/WORKING_MVP_PLAN.md). Remote cloning, patch application, pull requests, authentication, distributed workers, and broader language support remain later work.

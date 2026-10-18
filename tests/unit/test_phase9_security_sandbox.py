@@ -241,8 +241,8 @@ def test_i_container_cleanup_on_timeout(tmp_path: Path):
     killed_containers = []
 
     def mock_subprocess(cmd, **kwargs):
-        if cmd[0] == "docker" and cmd[1] == "kill":
-            killed_containers.append(cmd[2])
+        if cmd[:3] == ["docker", "rm", "-f"]:
+            killed_containers.append(cmd[3])
             return MagicMock(returncode=0)
         raise subprocess.TimeoutExpired(cmd=cmd, timeout=1)
 

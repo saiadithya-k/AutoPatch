@@ -9,6 +9,7 @@ FROM python:3.11-slim
 # Prevent Python from writing .pyc files and enable unbuffered output
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPYCACHEPREFIX=/tmp/autopatch-pycache
 
 # Security: Create unprivileged non-root user and group
 RUN groupadd -g 10001 validator && \
@@ -24,6 +25,9 @@ RUN pip install --no-cache-dir \
 # Build from repository root: docker build -f docker/validation/Dockerfile -t autopatch-validator .
 COPY backend/tools/semgrep_rules /opt/autopatch/rules
 ENV SEMGREP_SEND_METRICS=off
+
+# pip populated this cache as root; the runtime UID must be able to compile in /tmp.
+RUN mkdir -p /tmp/autopatch-pycache && chown -R 10001:10001 /tmp/autopatch-pycache
 
 # Set workspace directory inside container
 WORKDIR /workspace

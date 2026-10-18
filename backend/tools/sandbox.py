@@ -193,7 +193,7 @@ class DockerSandboxExecutor(SandboxExecutor):
         norm_cwd = str(cwd.resolve()).replace("\\", "/")
         # Build argument list
         docker_cmd = [
-            "docker", "run", "--rm",
+            "docker", "run", "--rm", "--pull", "never",
             "--name", container_name,
             "--network", "none",  # Strict network isolation
             "--user", "10001:10001",  # Non-root user
@@ -298,6 +298,8 @@ class DockerSandboxExecutor(SandboxExecutor):
                 shell=False,  # MANDATORY SECURITY GUARD
             )
             duration = time.perf_counter() - start_time
+            if process.returncode == 125 and self.fail_closed:
+                raise DockerRequiredError(f"Docker could not start the required validator: {process.stderr.strip()}")
             return SandboxExecutionResult(
                 exit_code=process.returncode,
                 stdout=process.stdout or "",
@@ -313,7 +315,7 @@ class DockerSandboxExecutor(SandboxExecutor):
             # Deterministic container cleanup on timeout
             try:
                 subprocess.run(
-                    ["docker", "kill", container_name],
+                    ["docker", "rm", "-f", container_name],
                     capture_output=True,
                     timeout=10,
                     shell=False,
@@ -330,6 +332,11 @@ class DockerSandboxExecutor(SandboxExecutor):
                 sandbox_type=self.sandbox_type,
             )
 
+        except KeyboardInterrupt:
+            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, timeout=10, shell=False)
+            raise
+        except DockerRequiredError:
+            raise
         except Exception as e:
             duration = time.perf_counter() - start_time
             logger.error("Docker command execution error: %s", e)

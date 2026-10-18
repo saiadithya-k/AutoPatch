@@ -34,6 +34,7 @@ class OpenAIProvider(LLMProvider):
         model: Optional[str] = None,
         base_url: str = "https://api.openai.com/v1",
         timeout: Optional[float] = None,
+        provider_name: str = "openai",
     ):
         """
         Initialize OpenAI provider.
@@ -48,10 +49,11 @@ class OpenAIProvider(LLMProvider):
         self._model = model or settings.LLM_MODEL or "gpt-4o"
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout if timeout is not None else settings.LLM_TIMEOUT
+        self._provider_name = provider_name
 
     @property
     def name(self) -> str:
-        return "openai"
+        return self._provider_name
 
     @property
     def model(self) -> str:
@@ -119,7 +121,8 @@ class OpenAIProvider(LLMProvider):
         }
 
         logger.info(
-            "Dispatching LLM request to OpenAI (model=%s, messages_count=%d)",
+            "Dispatching LLM request to %s (model=%s, messages_count=%d)",
+            self.name,
             self._model,
             len(messages),
         )

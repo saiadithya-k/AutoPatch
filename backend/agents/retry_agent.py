@@ -31,6 +31,7 @@ from backend.config import get_settings
 from backend.database.database import session_scope
 from backend.database.models import (
     PatchAttemptModel,
+    ReviewDecisionModel,
     RiskAssessmentModel,
     ValidationResultModel,
     VulnerabilityModel,
@@ -338,7 +339,16 @@ Instruction: Analyze the failure evidence above. Generate an improved patch that
             workflow_id = patch_record.workflow_id
             current_attempt_num = patch_record.attempt_number
             patch_content = patch_record.patch_content or ""
-            if patch_record.status in {PatchStatus.APPROVED.value, PatchStatus.REJECTED.value}:
+            reviewed = patch_record.status == PatchStatus.APPROVED.value
+            if patch_record.status == PatchStatus.REJECTED.value:
+                def _has_review(session):
+                    return session.query(ReviewDecisionModel).filter_by(patch_attempt_id=current_patch_id).first() is not None
+                if db_session is not None:
+                    reviewed = _has_review(db_session)
+                else:
+                    with session_scope() as session:
+                        reviewed = _has_review(session)
+            if reviewed:
                 raise PatchLifecycleConflict("Reviewed candidates cannot enter the retry loop.")
             if patch_record.status in {PatchStatus.FAILED.value, PatchStatus.REJECTED.value} or not patch_content.strip():
                 error_msg = "Candidate generation failed or was rejected; validation was not attempted."
