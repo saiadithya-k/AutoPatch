@@ -48,6 +48,7 @@ class TemporaryWorkspace:
         repository_path: str | Path,
         prefix: str = "autopatch_ws_",
         auto_cleanup: bool = True,
+        container_access: bool = False,
     ):
         """
         Initialize temporary workspace manager.
@@ -59,6 +60,7 @@ class TemporaryWorkspace:
         self.source_path = Path(repository_path).resolve()
         self.prefix = prefix
         self.auto_cleanup = auto_cleanup
+        self.container_access = container_access
         self.temp_dir: Optional[str] = None
         self.workspace_path: Optional[Path] = None
 
@@ -86,8 +88,30 @@ class TemporaryWorkspace:
 
         logger.debug("Created temporary workspace at %s for source %s", self.workspace_path, self.source_path)
 
-        self._safe_copy_repository()
+        try:
+            self._safe_copy_repository()
+            if self.container_access and os.name == "posix":
+                self._prepare_container_access()
+        except BaseException:
+            self.cleanup()
+            raise
         return self.workspace_path
+
+    def _prepare_container_access(self) -> None:
+        """Share only the disposable copy with the container's supplementary GID.
+
+        mkdtemp creates a private 0700 directory on Linux. The non-root
+        container joins the host process's group and needs group access to this
+        copy. Do not chmod the source, follow symlinks, or grant world access.
+        """
+        for root, dirs, files in os.walk(self.workspace_path, followlinks=False):
+            directory = Path(root)
+            directory.chmod(stat.S_IMODE(directory.stat().st_mode) | stat.S_IRWXU | stat.S_IRWXG | stat.S_ISGID)
+            dirs[:] = [name for name in dirs if not (directory / name).is_symlink()]
+            for name in files:
+                path = directory / name
+                if not path.is_symlink():
+                    path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IWGRP)
 
     def _safe_copy_repository(self) -> None:
         """

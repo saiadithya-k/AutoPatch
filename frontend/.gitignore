@@ -5,3 +5,5 @@ dist/
 .npm-cache/
 .qa-clean/
 dashboard-qa*.png
+playwright-report/
+test-results/

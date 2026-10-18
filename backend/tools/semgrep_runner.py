@@ -116,7 +116,7 @@ class SemgrepRunner:
 
         # Build safe subprocess argument list (no shell=True)
         cmd = cmd_base + ["--config", rule_config, "--no-git-ignore", "--project-root", ".", "--json", "--quiet",
-                          "--metrics=off", "--no-rewrite-rule-ids"]
+                          "--metrics=off", "--disable-version-check", "--no-rewrite-rule-ids", "--jobs", "1"]
         for excluded in (".venv", ".venv-runtime", "venv", "node_modules", ".test-artifacts", ".test-tmp"):
             cmd.extend(["--exclude", excluded])
         cmd.append(".")

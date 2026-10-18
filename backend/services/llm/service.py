@@ -62,6 +62,7 @@ class LLMService:
                 api_key=api_key,
                 model=settings.LLM_MODEL or "qwen2.5-coder:7b",
                 base_url=base_url,
+                provider_name="ollama",
             )
         elif name == "openai":
             if settings.OPENAI_API_KEY:
@@ -121,6 +122,7 @@ class LLMService:
                 response_schema=response_schema,
                 temperature=temperature,
                 timeout=timeout,
+                max_tokens=get_settings().LLM_MAX_OUTPUT_TOKENS,
             )
             return res.parsed
         except LLMError as e:

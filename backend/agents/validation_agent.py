@@ -220,7 +220,7 @@ class ValidationAgent:
             original_vulnerability_resolved=orig_resolved,
             remaining_original_findings_count=len(remaining_matches),
             new_findings_count=len(new_findings),
-            new_findings=[f.model_dump() for f in new_findings],
+            new_findings=[f.model_dump(mode="json") for f in new_findings],
             security_scan_passed=security_scan_passed,
         )
 
@@ -406,7 +406,7 @@ class ValidationAgent:
 
         # Step 2: Spawn Isolated Temporary Workspace
         try:
-            with TemporaryWorkspace(repository_path) as workspace:
+            with TemporaryWorkspace(repository_path, container_access=self.sandbox.sandbox_type == "docker") as workspace:
                 validation_logs.append(f"Spawned isolated temporary workspace at '{workspace}'.")
 
                 # Step 3: Apply Candidate Patch to Workspace Atomically

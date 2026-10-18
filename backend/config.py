@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     # LLM Settings
     LLM_PROVIDER: str = Field(default="openai", description="LLM provider name")
     LLM_TIMEOUT: float = Field(default=120.0, gt=0, le=600, description="Model response timeout in seconds, including local model startup")
+    LLM_MAX_OUTPUT_TOKENS: int = Field(default=4096, ge=256, le=32768, description="Bounded model response size")
     LLM_MODEL: str = Field(default="gpt-4o", description="LLM model identifier")
     LLM_BASE_URL: Optional[str] = Field(default=None, description="Custom LLM API base URL (e.g. http://localhost:11434/v1 for Ollama)")
     OPENAI_API_KEY: Optional[str] = Field(default=None, description="OpenAI API key")

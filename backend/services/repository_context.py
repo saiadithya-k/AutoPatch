@@ -584,10 +584,22 @@ class RepositoryContextService:
         # 7. Discover related files and tests
         related_files = self._discover_related_files(validated_root, target_path, imports)
         related_tests = self._discover_related_tests(validated_root, target_path)
+        seen_tests = {test.file_path for test in related_tests}
+        for related in related_files:
+            if len(related_tests) >= self.max_context_files:
+                break
+            for test in self._discover_related_tests(validated_root, validated_root / related.file_path):
+                if test.file_path not in seen_tests and len(related_tests) < self.max_context_files:
+                    related_tests.append(test)
+                    seen_tests.add(test.file_path)
 
         # 8. Apply secret redaction to context string
         if self.enable_secret_redaction:
             surrounding_code = self._redact_secrets(surrounding_code)
+            for related in related_files:
+                related.content_snippet = self._redact_secrets(related.content_snippet)
+            for test in related_tests:
+                test.content_snippet = self._redact_secrets(test.content_snippet or "")
 
         return RepositoryContext(
             vulnerability_id=finding.id,

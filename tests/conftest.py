@@ -73,7 +73,13 @@ def temp_clean_repo() -> Generator[Path, None, None]:
         yield tmp_path
 
 
-def pytest_collection_modifyitems(items):
+def pytest_addoption(parser):
+    parser.addoption("--run-docker", action="store_true", help="Require real Docker acceptance checks")
+    parser.addoption("--run-live-model", action="store_true", help="Send real requests to the configured local Ollama model")
+    parser.addoption("--validator-image", default="autopatch-validator-acceptance:latest", help="Prebuilt trusted validator image for Docker acceptance")
+
+
+def pytest_collection_modifyitems(config, items):
     """Identify existing real-tool tests without silently skipping missing prerequisites."""
     scanner_files = {
         "test_scan_integration.py", "test_api_scan.py", "test_api_patch.py",
@@ -87,3 +93,7 @@ def pytest_collection_modifyitems(items):
     for item in items:
         if Path(str(item.path)).name in scanner_files or item.originalname in scanner_functions:
             item.add_marker(pytest.mark.scanners)
+        if item.get_closest_marker("docker") and not config.getoption("--run-docker"):
+            item.add_marker(pytest.mark.skip(reason="Explicit opt-in required: --run-docker"))
+        if item.get_closest_marker("live_model") and not config.getoption("--run-live-model"):
+            item.add_marker(pytest.mark.skip(reason="Explicit opt-in required: --run-live-model"))
