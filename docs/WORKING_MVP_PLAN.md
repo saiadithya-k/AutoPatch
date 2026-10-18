@@ -19,10 +19,10 @@ The initial baseline and phase acceptance criteria below are retained for tracea
 
 ## Next milestone verification (2026-10-18)
 
-- Real Docker verification: **11 checks passed**, including offline/non-root execution, all four reference remediation cases, missing images/dependencies, bad candidates, and timeout cleanup.
+- Real Docker verification: **12 checks passed on hosted Linux**, including offline/non-root execution, all four reference remediation cases, missing images/dependencies, bad candidates, timeout cleanup, and native Linux workspace ownership/cleanup. The preceding local Docker Desktop run passed 11 checks.
 - Browser automation: **5 checks passed**, covering real workflow/review APIs, refresh persistence, superseded attempts, incomplete coverage, and mobile layout.
-- Python 3.11 deterministic/API/scanner suite: **322 passed**; Docker and live-model gates are explicit separate runs.
-- Added GitHub Actions jobs for Windows/Ubuntu Python 3.11, frontend build and browser tests, and real Linux Docker acceptance. Remote execution awaits the first push or manual dispatch.
+- Python 3.11 deterministic/API/scanner suite: **324 passed on hosted Ubuntu; 322 passed on hosted Windows**, which skips two Linux-specific permission checks. Docker and live-model gates are explicit separate runs.
+- Added GitHub Actions jobs for Windows/Ubuntu Python 3.11, frontend build and browser tests, and real Linux Docker acceptance. All four jobs passed in [hosted run 39095355977](https://github.com/saiadithya-k/AutoPatch/actions/runs/39095355977), after correcting native Linux access to the disposable workspace. The implementation is published on `codex/ollama-acceptance-ci` for review.
 - Added four reproducible live-model acceptance cases. Source-bound local-model edits resolved the three initially failing cases: the complete matrix now passes **4 of 4** with real Ollama, both locally and with offline Docker validation. The server supplies exact original source and destinations; model responses select block IDs and replacements. Tests remain read-only, unknown IDs and stale originals fail closed, and retries use original source.
 - All original repositories remained unchanged. Incomplete fixes, invalid replacements, repeated candidates and timeouts remain explicit failures; no validation or review gates were weakened.
 - See [the milestone report](MILESTONE_ACCEPTANCE.md) for commands, evidence, fixes, and limitations.

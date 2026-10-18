@@ -10,11 +10,11 @@ behavioral tests and security re-scans.
 
 | Gate | Result |
 | --- | --- |
-| Deterministic Python/API/scanner regression suite | 322 passed; external-service gates deselected |
-| Real Docker acceptance | 11 passed |
+| Deterministic Python/API/scanner regression suite | 324 passed on hosted Ubuntu; 322 passed on hosted Windows, with two Linux-specific checks skipped |
+| Real Docker acceptance | 12 passed on hosted Linux; 11 passed locally on Docker Desktop before the Linux-specific check was added |
 | Browser workflow/review regression suite | 5 passed in installed Chrome; no uncaught page errors |
 | Frontend production build | Passed |
-| GitHub-hosted workflow execution | Branch published; first run passed both Python jobs and browser/build, Docker permission correction under verification |
+| GitHub-hosted workflow execution | All four jobs passed on commit `db7126b`; [verified run](https://github.com/saiadithya-k/AutoPatch/actions/runs/39095355977) |
 | Previously successful literal-parser fixture, live Ollama | Rechecked successfully; both candidates ready for review |
 | Combined real Ollama + Docker matrix | All four cases passed; all original source files unchanged |
 
@@ -89,10 +89,15 @@ validation and developer review.
 Current evidence:
 
 - `.test-artifacts/ollama-source-blocks-20261018/summary.json`: local, 4/4 passed.
-- `.test-artifacts/ollama-source-blocks-docker-20261018/summary.json`: Docker, 4/4
-  passed; approximately 19, 14, 15 and 27 seconds respectively.
+- `.test-artifacts/ollama-source-blocks-docker-final-20261018/summary.json`: final
+  Docker image, 4/4 passed; approximately 18, 14, 16 and 26 seconds respectively.
+- `.test-artifacts/ollama-source-blocks-literal-20261018/summary.json`: original
+  literal-parser baseline passed again with the current generation path.
 - `.test-artifacts/source-edit-full.xml`: Python regression evidence.
 - `.test-artifacts/source-edit-docker.xml`: real Docker regression evidence.
+- `.test-artifacts/github-ci-39095355977/summary.json`: hosted job results and
+  test counts, with job logs alongside it. Python tests took about 66 seconds on
+  Ubuntu and 120 seconds on Windows; Docker took 71 seconds; browser tests 34 seconds.
 
 ## Run the checks
 
@@ -168,10 +173,13 @@ Windows, a Linux frontend build and browser suite, and a Linux Docker image
 build plus real container tests. Reports are uploaded even when a gate fails.
 Jobs have read-only repository permissions and do not deploy or publish images.
 
-Hosted CI does not pretend to have the user's Ollama service. Live acceptance
-remains an explicit local gate. The checked-in workflow is ready for its first
-remote run after the changes are pushed; local verification is not a claimed
-GitHub Actions result.
+Hosted CI does not have the user's Ollama service. Live acceptance remains an
+explicit local gate. The first hosted run exposed a native Linux bind-mount
+permission issue; the correction and additional Linux checks passed in
+[run 39095355977](https://github.com/saiadithya-k/AutoPatch/actions/runs/39095355977).
+The implementation is published on `codex/ollama-acceptance-ci`; it has not been
+merged into `main` or deployed. Report-only documentation updates do not require
+another execution of already passing code checks.
 
 ## Reliability fixes exposed by this milestone
 
